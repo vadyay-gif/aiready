@@ -1,0 +1,32 @@
+{
+    "dart.flutterSdkPath": null,
+    "dart.sdkPath": null,
+    "dart.hotReloadOnSave": "all",
+    "dart.hotRestartOnSave": "never",
+    "dart.previewFlutterUiGuides": true,
+    "dart.previewFlutterUiGuidesCustomTracking": true,
+    "dart.closingLabels": true,
+    "dart.lineLength": 80,
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+        "source.fixAll": "explicit",
+        "source.organizeImports": "explicit"
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
