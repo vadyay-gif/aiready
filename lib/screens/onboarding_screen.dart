@@ -1,6 +1,5 @@
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import '../services/onboarding_service.dart';
+import '../services/guided_onboarding.dart';
 import 'home_screen.dart';
 
 class OnboardingScreen extends StatefulWidget {
@@ -14,268 +13,181 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   final PageController _controller = PageController();
   int _index = 0;
 
-  void _skip() => _finish();
-  void _next() => (_index < _pages.length - 1)
-      ? _controller.nextPage(duration: const Duration(milliseconds: 250), curve: Curves.easeOut)
-      : _finish();
-
-  void _finish() {
-    OnboardingService.markOnboardingSeen().then((_) {
-      if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const HomeScreen()),
+  void _next() {
+    if (_index < _pages.length - 1) {
+      _controller.nextPage(
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeInOut,
       );
-    });
+    } else {
+      _startGuidedTour();
+    }
   }
 
-  late final List<_PageData> _pages = const <_PageData>[
-    _PageData(
-      icon: Icons.auto_awesome,
-      title: 'Master AI at work',
-      subtitle: 'Learn practical AI skills that will transform how you work. From writing emails to creating presentations, become an AI power user in just 30 days.',
-      bullets: null,
+  void _startGuidedTour() {
+    // Begin the in-app guided walkthrough. Completion is handled later
+    // once the user finishes the full tour inside the app.
+    GuidedOnboarding.start();
+    if (!mounted) return;
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => const HomeScreen()),
+    );
+  }
+
+  final List<_OnboardingPage> _pages = const [
+    _OnboardingPage(
+      title: 'Welcome to AI Ready',
+      body:
+          'AI Ready helps you use AI practically at work.\nClear guidance. Real scenarios. Better results.',
     ),
-    _PageData(
-      icon: Icons.schedule,
-      title: 'Learn in minutes',
-      subtitle: 'Quick, practical lessons you can finish fast.',
-      bullets: [
-        _Bullet(icon: Icons.flash_on, title: 'Quick 5-minute lessons', subtitle: 'Perfect for busy schedules'),
-        _Bullet(icon: Icons.handyman, title: 'Hands-on practice', subtitle: 'Real scenarios you\'ll use at work'),
-        _Bullet(icon: Icons.trending_up, title: 'Immediate results', subtitle: 'See improvements from day one'),
-      ],
+    _OnboardingPage(
+      title: 'C.O.R.E. Prompting',
+      body:
+          'AI Ready teaches C.O.R.E. prompting:\nContext, Objective, Role, Expectations.\nA simple way to get better AI results.',
     ),
-    _PageData(
-      icon: Icons.school,
-      title: 'Your AI coach',
-      subtitle: 'Personalized daily tips and progress tracking.',
-      bullets: [
-        _Bullet(icon: Icons.tips_and_updates, title: 'Daily AI Tips', subtitle: 'Short, useful nudges'),
-        _Bullet(icon: Icons.analytics, title: 'Track progress', subtitle: 'Stay motivated'),
-      ],
-    ),
-    _PageData(
-      icon: Icons.rocket_launch,
-      title: 'Ready to try?',
-      subtitle: 'Join thousands of professionals who are already using AI to work smarter, not harder. Your journey to AI mastery starts now!',
-      bullets: [
-        _Bullet(icon: Icons.layers, title: '9 specialized AI skill tracks', subtitle: 'Emails, reports, presentations, and more'),
-        _Bullet(icon: Icons.assignment, title: '45+ hands-on scenarios', subtitle: 'Real-world applications'),
-        _Bullet(icon: Icons.timeline, title: 'Daily tips and progress tracking', subtitle: 'Stay on track'),
-      ],
-      ctaText: 'Start Learning',
+    _OnboardingPage(
+      title: 'How It Works',
+      body:
+          'Choose a Track.\nChoose a Lesson.\nWork through real scenarios.\nLearn by doing.',
+      isCompletion: true,
     ),
   ];
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.white,
       body: SafeArea(
         child: Column(
           children: [
-            // Top bar with Skip
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton(
-                onPressed: _skip,
-                child: const Text(
-                  'Skip',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ),
-            ),
             Expanded(
               child: PageView.builder(
                 controller: _controller,
                 itemCount: _pages.length,
                 onPageChanged: (i) => setState(() => _index = i),
-                itemBuilder: (context, i) => _OnboardPage(data: _pages[i]),
+                itemBuilder: (context, i) => _OnboardingPageWidget(
+                  page: _pages[i],
+                ),
               ),
             ),
-            // Dots (above bottom bar so they never overflow)
+            // Page indicators
             Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: _Dots(count: _pages.length, index: _index),
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              child: _PageIndicators(
+                count: _pages.length,
+                currentIndex: _index,
+              ),
+            ),
+            // Continue button
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+              child: SizedBox(
+                width: double.infinity,
+                height: 50,
+                child: ElevatedButton(
+                  onPressed: _next,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF007AFF),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    elevation: 0,
+                  ),
+                  child: Text(
+                    _pages[_index].isCompletion
+                        ? 'Start Guided Tour'
+                        : 'Continue',
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: -0.4,
+                    ),
+                  ),
+                ),
+              ),
             ),
           ],
         ),
       ),
-      bottomNavigationBar: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
-          child: SizedBox(
-            width: double.infinity,
-            height: 52,
-            child: ElevatedButton(
-              onPressed: _next,
-              style: ElevatedButton.styleFrom(
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-              child: Text(
-                _index < _pages.length - 1 ? 'Next' : 'Start Learning',
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
     );
   }
-}
-
-class _OnboardPage extends StatelessWidget {
-  const _OnboardPage({required this.data});
-  final _PageData data;
 
   @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(builder: (context, c) {
-      final h = c.maxHeight;
-      final isSmall = h < 680;
-      final iconSize = isSmall ? 64.0 : 88.0;
-      final gapLg = isSmall ? 16.0 : 24.0;
-      final gapSm = isSmall ? 8.0 : 12.0;
-      final maxW = math.min(c.maxWidth, 720.0);
-
-      return Center(
-        child: ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: maxW),
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: ConstrainedBox(
-              constraints: BoxConstraints(minHeight: h),
-              child: IntrinsicHeight(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    SizedBox(height: gapLg),
-                    CircleAvatar(
-                      radius: iconSize / 2,
-                      backgroundColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
-                      child: Icon(
-                        data.icon,
-                        size: iconSize,
-                        color: Theme.of(context).colorScheme.primary,
-                      ),
-                    ),
-                    SizedBox(height: gapLg),
-                    Text(
-                      data.title,
-                      textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.w600,
-                        color: Colors.black87,
-                      ),
-                    ),
-                    if (data.subtitle != null) ...[
-                      SizedBox(height: gapSm),
-                      Text(
-                        data.subtitle!,
-                        textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                          color: Colors.grey.shade600,
-                          height: 1.5,
-                        ),
-                      ),
-                    ],
-                    SizedBox(height: gapLg),
-                    if (data.bullets != null)
-                      ...data.bullets!.map((b) => _BulletTile(b)).toList(),
-                    const Spacer(), // pushes content but allows scroll if needed
-                    SizedBox(height: gapLg),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
-    });
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
   }
 }
 
-class _BulletTile extends StatelessWidget {
-  const _BulletTile(this.b);
-  final _Bullet b;
+class _OnboardingPageWidget extends StatelessWidget {
+  const _OnboardingPageWidget({required this.page});
+
+  final _OnboardingPage page;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 32),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          CircleAvatar(
-            radius: 18,
-            backgroundColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
-            child: Icon(
-              b.icon,
-              size: 20,
-              color: Theme.of(context).colorScheme.primary,
+          const SizedBox(height: 40),
+          Text(
+            page.title,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 28,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF000000),
+              letterSpacing: -0.5,
+              height: 1.2,
             ),
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  b.title,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                    color: Colors.black87,
-                  ),
-                ),
-                if (b.subtitle != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: Text(
-                      b.subtitle!,
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Colors.grey.shade600,
-                      ),
-                    ),
-                  ),
-              ],
+          const SizedBox(height: 24),
+          Text(
+            page.body,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.w400,
+              color: Color(0xFF3C3C43),
+              letterSpacing: -0.4,
+              height: 1.4,
             ),
           ),
+          const SizedBox(height: 40),
         ],
       ),
     );
   }
 }
 
-class _Dots extends StatelessWidget {
-  const _Dots({required this.count, required this.index});
+class _PageIndicators extends StatelessWidget {
+  const _PageIndicators({
+    required this.count,
+    required this.currentIndex,
+  });
+
   final int count;
-  final int index;
-  
+  final int currentIndex;
+
   @override
   Widget build(BuildContext context) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: List.generate(
         count,
-        (i) => AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          margin: const EdgeInsets.symmetric(horizontal: 4),
-          width: i == index ? 18 : 8,
+        (index) => Container(
+          width: index == currentIndex ? 8 : 8,
           height: 8,
+          margin: const EdgeInsets.symmetric(horizontal: 4),
           decoration: BoxDecoration(
-            color: i == index
-                ? Theme.of(context).colorScheme.primary
-                : Theme.of(context).colorScheme.primary.withValues(alpha: 0.35),
-            borderRadius: BorderRadius.circular(8),
+            color: index == currentIndex
+                ? const Color(0xFF007AFF)
+                : const Color(0xFFC7C7CC),
+            shape: BoxShape.circle,
           ),
         ),
       ),
@@ -283,28 +195,14 @@ class _Dots extends StatelessWidget {
   }
 }
 
-class _PageData {
-  const _PageData({
-    required this.icon,
+class _OnboardingPage {
+  const _OnboardingPage({
     required this.title,
-    this.subtitle,
-    this.bullets,
-    this.ctaText,
+    required this.body,
+    this.isCompletion = false,
   });
-  final IconData icon;
-  final String title;
-  final String? subtitle;
-  final List<_Bullet>? bullets;
-  final String? ctaText;
-}
 
-class _Bullet {
-  const _Bullet({
-    required this.icon,
-    required this.title,
-    this.subtitle,
-  });
-  final IconData icon;
   final String title;
-  final String? subtitle;
+  final String body;
+  final bool isCompletion;
 }

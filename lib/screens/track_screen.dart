@@ -2,24 +2,43 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../models/track.dart';
 import '../services/progress_service.dart';
+import '../services/guided_onboarding.dart';
 import '../widgets/lesson_bar.dart';
+import '../widgets/guided_overlay.dart';
 import '../data/app_catalog.dart';
 import 'scenario_choice_screen.dart';
 
-class TrackScreen extends StatelessWidget {
+class TrackScreen extends StatefulWidget {
   final int trackIndex;
   final Track? track; // Keep for backward compatibility
 
   const TrackScreen({super.key, required this.trackIndex, this.track});
 
   @override
+  State<TrackScreen> createState() => _TrackScreenState();
+}
+
+class _TrackScreenState extends State<TrackScreen> {
+  final GlobalKey _lesson1Key = GlobalKey();
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     // Use the new unified catalog
-    final trackDef = kTracks[trackIndex];
+    final trackDef = kTracks[widget.trackIndex];
     final lessons = trackDef.lessons;
     final progressService = ProgressService();
     final media = MediaQuery.of(context)
         .copyWith(textScaler: const TextScaler.linear(1.0));
+    final isGuided = GuidedOnboarding.isActive &&
+        GuidedOnboarding.step == GuidedOnboardingStep.lessonSelection &&
+        widget.trackIndex == 0; // Only for Track 1
 
     return MediaQuery(
       data: media,
@@ -27,7 +46,17 @@ class TrackScreen extends StatelessWidget {
         appBar: AppBar(
           title: Text(trackDef.title),
         ),
-        body: _buildHorizontalBarLayout(context, lessons, progressService),
+        body: Stack(
+          children: [
+            _buildHorizontalBarLayout(context, lessons, progressService),
+            if (isGuided)
+              GuidedOverlay(
+                text: "Lessons focus on one specific skill.\nChoose the first lesson.",
+                highlightedKey: _lesson1Key,
+                scrollController: _scrollController,
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -54,24 +83,58 @@ class TrackScreen extends StatelessWidget {
                     ),
                   )
                 : ListView.separated(
+                    controller: _scrollController,
                     itemCount: lessons.length,
                     separatorBuilder: (_, __) => const SizedBox(height: 12),
                     itemBuilder: (context, i) {
                       final lesson = lessons[i];
+                      final isGuided = GuidedOnboarding.isActive &&
+                          GuidedOnboarding.step ==
+                              GuidedOnboardingStep.lessonSelection &&
+                          widget.trackIndex == 0;
+                      final isGuidedTarget = isGuided && i == 0;
+                      final allowTap = !isGuided || isGuidedTarget;
 
                       return FutureBuilder<bool>(
                         future: progressService
-                            .isLessonComplete('t${trackIndex + 1}_l${i + 1}'),
+                            .isLessonComplete('t${widget.trackIndex + 1}_l${i + 1}'),
                         builder: (context, snapshot) {
                           final isCompleted = snapshot.data ?? false;
                           final progress = isCompleted ? 1.0 : null;
 
+                          // Wrap with key if this is the target to ensure proper positioning
+                          if (isGuidedTarget) {
+                            return SizedBox(
+                              key: _lesson1Key,
+                              child: LessonBar(
+                                title: lesson.title,
+                                subtitle: null, // subtitles are hidden in LessonBar
+                                progress: progress,
+                                icon: _getTrackIcon('t${widget.trackIndex + 1}'),
+                                onTap: () {
+                                  if (!allowTap) return;
+                                  if (isGuided && i == 0) {
+                                    GuidedOnboarding.goTo(
+                                        GuidedOnboardingStep.scenarioSelection);
+                                  }
+                                  _openLessonDetail(context, i);
+                                },
+                              ),
+                            );
+                          }
                           return LessonBar(
                             title: lesson.title,
                             subtitle: null, // subtitles are hidden in LessonBar
                             progress: progress,
-                            icon: _getTrackIcon('t${trackIndex + 1}'),
-                            onTap: () => _openLessonDetail(context, i),
+                            icon: _getTrackIcon('t${widget.trackIndex + 1}'),
+                            onTap: () {
+                              if (!allowTap) return;
+                              if (isGuided && i == 0) {
+                                GuidedOnboarding.goTo(
+                                    GuidedOnboardingStep.scenarioSelection);
+                              }
+                              _openLessonDetail(context, i);
+                            },
                           );
                         },
                       );
@@ -111,13 +174,13 @@ class TrackScreen extends StatelessWidget {
   void _openLessonDetail(BuildContext context, int lessonIndex) {
     // Navigate directly to scenario choice screen
     if (kDebugMode) {
-      debugPrint('Nav: Track -> ScenarioChoice | ${kTracks[trackIndex].title} / ${kTracks[trackIndex].lessons[lessonIndex].title}');
+      debugPrint('Nav: Track -> ScenarioChoice | ${kTracks[widget.trackIndex].title} / ${kTracks[widget.trackIndex].lessons[lessonIndex].title}');
     }
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => ScenarioChoiceScreen(
-          trackIndex: trackIndex,
+          trackIndex: widget.trackIndex,
           lessonIndex: lessonIndex,
         ),
       ),

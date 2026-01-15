@@ -4,12 +4,14 @@ class TrackTile extends StatelessWidget {
   final String title;
   final Widget icon;
   final VoidCallback? onTap;
+  final bool highlight;
 
   const TrackTile({
     super.key,
     required this.title,
     required this.icon,
     this.onTap,
+    this.highlight = false,
   });
 
   @override
@@ -22,7 +24,7 @@ class TrackTile extends StatelessWidget {
     return Material(
       color: Colors.white,
       borderRadius: BorderRadius.circular(20),
-      elevation: 2,
+      elevation: highlight ? 4 : 2,
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(20),

@@ -3,6 +3,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:provider/provider.dart';
 import '../services/progress_store.dart';
 import '../services/onboarding_service.dart';
+import '../services/guided_onboarding.dart';
+import '../widgets/guided_overlay.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -13,11 +15,19 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   bool _dailyTipEnabled = true;
+  final GlobalKey _progressKey = GlobalKey();
+  final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
     _loadSettings();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadSettings() async {
@@ -101,6 +111,9 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final isGuided = GuidedOnboarding.isActive &&
+        GuidedOnboarding.step == GuidedOnboardingStep.infoSettings;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('AI Ready Info and Settings'),
@@ -108,9 +121,12 @@ class _SettingsPageState extends State<SettingsPage> {
         foregroundColor: Colors.black87,
         elevation: 0,
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
+      body: Stack(
         children: [
+          ListView(
+            controller: _scrollController,
+            padding: const EdgeInsets.all(16),
+            children: [
           // Notifications Section
           _buildSectionHeader(context, 'Notifications'),
           
@@ -129,20 +145,27 @@ class _SettingsPageState extends State<SettingsPage> {
           const SizedBox(height: 24),
           
           // Progress Section
-          _buildSectionHeader(context, 'Progress'),
-          
-          Consumer<ProgressStore>(
-            builder: (context, store, child) {
-              final completion = store.overallCompletion();
-              return _buildSettingsTile(
-                context,
-                icon: Icons.analytics,
-                title: 'Overall Completion',
-                subtitle: 'Your progress: ${(completion * 100).round()}% complete',
-                trailing: null,
-                onTap: null,
-              );
-            },
+          SizedBox(
+            key: isGuided ? _progressKey : null,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildSectionHeader(context, 'Progress'),
+                Consumer<ProgressStore>(
+                  builder: (context, store, child) {
+                    final completion = store.overallCompletion();
+                    return _buildSettingsTile(
+                      context,
+                      icon: Icons.analytics,
+                      title: 'Overall Completion',
+                      subtitle: 'Your progress: ${(completion * 100).round()}% complete',
+                      trailing: null,
+                      onTap: null,
+                    );
+                  },
+                ),
+              ],
+            ),
           ),
           
           const SizedBox(height: 24),
@@ -184,6 +207,21 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
         ],
       ),
+          if (isGuided)
+            GuidedOverlay(
+              text: "You can track your progress here.",
+              highlightedKey: _progressKey,
+              scrollController: _scrollController,
+              showCompletionButton: true,
+              onComplete: () async {
+                await GuidedOnboarding.complete();
+                if (mounted) {
+                  Navigator.of(context).popUntil((route) => route.isFirst);
+                }
+              },
+            ),
+        ],
+      ),
     );
   }
 
@@ -202,6 +240,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Widget _buildSettingsTile(
     BuildContext context, {
+    Key? key,
     required IconData icon,
     required String title,
     required String subtitle,
@@ -209,7 +248,7 @@ class _SettingsPageState extends State<SettingsPage> {
     VoidCallback? onTap,
     bool isDestructive = false,
   }) {
-    return Card(
+    final card = Card(
       margin: const EdgeInsets.only(bottom: 8),
       child: ListTile(
         leading: Icon(
@@ -233,5 +272,10 @@ class _SettingsPageState extends State<SettingsPage> {
         onTap: onTap,
       ),
     );
+    
+    if (key != null) {
+      return SizedBox(key: key, child: card);
+    }
+    return card;
   }
 }

@@ -1,7 +1,8 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
 class OnboardingService {
-  static const String _onboardingSeenKey = 'onboarding_seen_v1';
+  // Bump version when the onboarding experience changes in a breaking way.
+  static const String _onboardingSeenKey = 'onboarding_seen_v3';
 
   /// Check if onboarding has been seen
   static Future<bool> hasSeenOnboarding() async {

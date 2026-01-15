@@ -4,6 +4,8 @@ import '../models/scenario.dart';
 import '../models/lesson.dart';
 import '../models/track.dart';
 import '../data/app_catalog.dart';
+import '../services/guided_onboarding.dart';
+import '../widgets/guided_overlay.dart';
 import 'task_screen.dart';
 
 class ScenarioScreen extends StatefulWidget {
@@ -32,6 +34,78 @@ class _ScenarioScreenState extends State<ScenarioScreen> {
   late String currentOutput;
   int? selectedRefinementIndex;
   int _selectedVariantIndex = -1;
+  final GlobalKey _taskButtonKey = GlobalKey();
+  final GlobalKey _situationKey = GlobalKey();
+  final GlobalKey _promptKey = GlobalKey();
+  final GlobalKey _responseKey = GlobalKey();
+  final GlobalKey _variantsKey = GlobalKey();
+  final GlobalKey _proTipKey = GlobalKey();
+  final ScrollController _scrollController = ScrollController();
+  int _currentSectionIndex = 0; // 0 = situation, 1 = prompt, 2 = response, 3 = variants, 4 = pro tip
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  // Get section information for guided walkthrough
+  List<_SectionInfo> _getSections(ScenarioDef scenarioDef) {
+    final sections = <_SectionInfo>[];
+    
+    sections.add(_SectionInfo(
+      key: _situationKey,
+      title: 'Situation',
+      explanation: 'This describes the real work situation you\'re facing.',
+    ));
+    
+    sections.add(_SectionInfo(
+      key: _promptKey,
+      title: 'Suggested Prompt',
+      explanation: 'This is an example of how to ask AI for help with this situation.',
+    ));
+    
+    sections.add(_SectionInfo(
+      key: _responseKey,
+      title: "AI's Response",
+      explanation: 'This shows how AI responds to the prompt.',
+    ));
+    
+    if ((scenarioDef.variants?.isNotEmpty ?? false)) {
+      sections.add(_SectionInfo(
+        key: _variantsKey,
+        title: 'Adjust the Result',
+        explanation: 'You can refine AI\'s response to better match what you need.',
+      ));
+    }
+    
+    if ((scenarioDef.proTip ?? "").trim().isNotEmpty) {
+      sections.add(_SectionInfo(
+        key: _proTipKey,
+        title: 'Pro Tip',
+        explanation: 'This tip helps you use AI more effectively.',
+      ));
+    }
+    
+    return sections;
+  }
+  
+  void _nextSection() {
+    final trackDef = kTracks[widget.trackIndex];
+    final lessonDef = trackDef.lessons[widget.lessonIndex];
+    final scenarioDef = lessonDef.scenarios[widget.scenarioIndex];
+    final sections = _getSections(scenarioDef);
+    
+    if (_currentSectionIndex < sections.length - 1) {
+      setState(() {
+        _currentSectionIndex++;
+      });
+    } else {
+      // All sections viewed, progress to task
+      GuidedOnboarding.goTo(GuidedOnboardingStep.taskIntro);
+      setState(() {});
+    }
+  }
 
   @override
   void initState() {
@@ -137,77 +211,151 @@ class _ScenarioScreenState extends State<ScenarioScreen> {
       return true;
     }());
 
+    final isGuided = GuidedOnboarding.isActive &&
+        GuidedOnboarding.step == GuidedOnboardingStep.scenarioOverview &&
+        widget.trackIndex == 0 &&
+        widget.lessonIndex == 0 &&
+        widget.scenarioIndex == 0; // Only for Track 1, Lesson 1, Scenario 1
+
     return Scaffold(
       appBar: AppBar(title: Text(scenarioDef.title)),
-      body: SafeArea(
-        top: true,
-        bottom: false,
-        child: ListView(
-          padding: EdgeInsets.fromLTRB(16, 16, 16, 24 + bottomInset),
+      body: Stack(
+        children: [
+          SafeArea(
+            top: true,
+            bottom: false,
+            child: ListView(
+              controller: _scrollController,
+              padding: EdgeInsets.fromLTRB(16, 16, 16, 24 + bottomInset),
           children: [
             // 1. Situation
-            _SectionCard(
-              title: 'Situation',
-              child: Text(
-                scenarioDef.situation,
-                style: const TextStyle(fontSize: 16, height: 1.4),
+            SizedBox(
+              key: isGuided ? _situationKey : null,
+              child: _SectionCard(
+                title: 'Situation',
+                child: Text(
+                  scenarioDef.situation,
+                  style: const TextStyle(fontSize: 16, height: 1.4),
+                ),
               ),
             ),
             const SizedBox(height: 16),
 
-            // 2. What to Ask AI (Prompt)
-            _SectionCard(
-              title: 'What to Ask AI',
-              child: SelectableText(
-                scenarioDef.prompt,
-                style: const TextStyle(fontSize: 16, height: 1.4),
+            // 2. Suggested Prompt
+            SizedBox(
+              key: isGuided ? _promptKey : null,
+              child: _SectionCard(
+                title: 'Suggested Prompt',
+                child: SelectableText(
+                  scenarioDef.prompt,
+                  style: const TextStyle(fontSize: 16, height: 1.4),
+                ),
               ),
             ),
             const SizedBox(height: 16),
 
             // 3. AI's Response
-            _SectionCard(
-              title: "AI's Response",
-              child: Text(
-                _displayResponse(scenarioDef),
-                style: const TextStyle(fontSize: 16, height: 1.4),
+            SizedBox(
+              key: isGuided ? _responseKey : null,
+              child: _SectionCard(
+                title: "AI's Response",
+                child: Text(
+                  _displayResponse(scenarioDef),
+                  style: const TextStyle(fontSize: 16, height: 1.4),
+                ),
               ),
             ),
             const SizedBox(height: 16),
 
             // 4. Adjust the Result
             if (hasVariants) ...[
-              _SectionCard(
-                title: "Adjust the Result",
-                child: _buildVariantChips(scenarioDef),
+              SizedBox(
+                key: isGuided ? _variantsKey : null,
+                child: _SectionCard(
+                  title: "Adjust the Result",
+                  child: _buildVariantChips(scenarioDef),
+                ),
               ),
               const SizedBox(height: 16),
             ],
 
             // 5. Pro Tip
             if ((scenarioDef.proTip ?? "").trim().isNotEmpty) ...[
-              _SectionCard(
-                title: "Pro Tip",
-                child: Text((scenarioDef.proTip ?? "").trim()),
+              SizedBox(
+                key: isGuided ? _proTipKey : null,
+                child: _SectionCard(
+                  title: "Pro Tip",
+                  child: Text((scenarioDef.proTip ?? "").trim()),
+                ),
               ),
               const SizedBox(height: 16),
             ],
 
             // Task and Takeaway moved off the Scenario screen by design.
           ],
-        ),
+            ),
+          ),
+          if (isGuided) ...[
+            Builder(
+              builder: (context) {
+                final trackDef = kTracks[widget.trackIndex];
+                final lessonDef = trackDef.lessons[widget.lessonIndex];
+                final scenarioDef = lessonDef.scenarios[widget.scenarioIndex];
+                final sections = _getSections(scenarioDef);
+                
+                if (_currentSectionIndex >= sections.length) {
+                  // All sections viewed, no overlay needed
+                  return const SizedBox.shrink();
+                }
+                
+                final currentSection = sections[_currentSectionIndex];
+                final isLastSection = _currentSectionIndex == sections.length - 1;
+                return GuidedOverlay(
+                  text: currentSection.explanation,
+                  highlightedKey: currentSection.key,
+                  secondHighlightedKey: isLastSection ? _taskButtonKey : null, // Also highlight button on last section
+                  scrollController: _scrollController,
+                  showContinueButton: !isLastSection, // No Continue button on last section
+                  continueButtonText: 'Next',
+                  onContinue: _nextSection,
+                );
+              },
+            ),
+          ],
+        ],
       ),
       bottomNavigationBar: SafeArea(
         top: false,
         bottom: true,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-          child: SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: hasTask ? () => _navigateToTask() : null,
-              child: Text(hasTask ? 'Try the Task' : 'Task is being prepared'),
-            ),
+          child: Builder(
+            builder: (context) {
+              final trackDef = kTracks[widget.trackIndex];
+              final lessonDef = trackDef.lessons[widget.lessonIndex];
+              final scenarioDef = lessonDef.scenarios[widget.scenarioIndex];
+              final sections = _getSections(scenarioDef);
+              // Button is visible when not guided, all sections viewed, or viewing the last section
+              final allSectionsViewed = !isGuided || 
+                  _currentSectionIndex >= sections.length ||
+                  (isGuided && _currentSectionIndex == sections.length - 1);
+              
+              return SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  key: (isGuided && allSectionsViewed) ? _taskButtonKey : null,
+                  onPressed: hasTask && allSectionsViewed
+                      ? () {
+                          if (isGuided) {
+                            GuidedOnboarding.goTo(GuidedOnboardingStep.taskIntro);
+                          }
+                          _navigateToTask();
+                        }
+                      : null,
+                  child: Text(hasTask ? 'Try the Task' : 'Task is being prepared'),
+                ),
+              );
+            },
           ),
         ),
       ),
@@ -263,4 +411,16 @@ class _SectionCard extends StatelessWidget {
       ),
     );
   }
+}
+
+class _SectionInfo {
+  const _SectionInfo({
+    required this.key,
+    required this.title,
+    required this.explanation,
+  });
+
+  final GlobalKey key;
+  final String title;
+  final String explanation;
 }

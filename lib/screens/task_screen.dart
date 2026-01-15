@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../data/app_catalog.dart';
 import '../services/progress_store.dart';
+import '../services/guided_onboarding.dart';
+import '../widgets/guided_overlay.dart';
 import 'scenario_complete_screen.dart';
 import 'scenario_incomplete_screen.dart';
 
@@ -27,6 +29,30 @@ class _TaskScreenState extends State<TaskScreen> {
   bool isCorrect = false;
   String feedbackMessage = '';
   int correctCount = 0;
+  final GlobalKey _taskGoalKey = GlobalKey();
+  final GlobalKey _feedbackKey = GlobalKey();
+  final GlobalKey _doneButtonKey = GlobalKey();
+  final Map<int, GlobalKey> _answerKeys = {};
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    // Initialize keys for all answer options
+    final trackDef = kTracks[widget.trackIndex];
+    final lessonDef = trackDef.lessons[widget.lessonIndex];
+    final scenarioDef = lessonDef.scenarios[widget.scenarioIndex];
+    final promptPieces = _generatePromptPieces(scenarioDef);
+    for (int i = 0; i < promptPieces.length; i++) {
+      _answerKeys[i] = GlobalKey();
+    }
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -40,22 +66,34 @@ class _TaskScreenState extends State<TaskScreen> {
     final requiredSelectionCount =
         promptPieces.where((piece) => piece.isCorrect).length;
     final selectedCount = selectedPieces.length;
+    final isGuided = GuidedOnboarding.isActive &&
+        widget.trackIndex == 0 &&
+        widget.lessonIndex == 0 &&
+        widget.scenarioIndex == 0;
+    final isTaskIntro = isGuided &&
+        GuidedOnboarding.step == GuidedOnboardingStep.taskIntro;
+    final isTaskGuidance = isGuided &&
+        GuidedOnboarding.step == GuidedOnboardingStep.taskGuidance;
 
     return Scaffold(
       appBar: AppBar(title: Text(scenarioDef.title)),
-      body: SafeArea(
-        top: true,
-        bottom: false,
-        child: ListView(
-          padding: EdgeInsets.fromLTRB(16, 16, 16, 24 + bottomInset),
-          children: [
-            // Task Goal
-            Container(
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.primaryContainer,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              padding: const EdgeInsets.all(16),
+      body: Stack(
+        children: [
+          SafeArea(
+            top: true,
+            bottom: false,
+            child: ListView(
+              controller: _scrollController,
+              padding: EdgeInsets.fromLTRB(16, 16, 16, 24 + bottomInset),
+              children: [
+                // Task Goal
+                Container(
+                  key: isTaskIntro ? _taskGoalKey : null,
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.primaryContainer,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -108,72 +146,86 @@ class _TaskScreenState extends State<TaskScreen> {
               final index = entry.key;
               final piece = entry.value;
               final isSelected = selectedPieces.contains(index);
+              final isCorrect = piece.isCorrect;
+              final showArrow = isTaskGuidance && isCorrect;
 
               return Padding(
                 padding: const EdgeInsets.only(bottom: 8),
-                child: Material(
-                  color: isSelected
-                      ? Theme.of(context)
-                          .colorScheme
-                          .primary
-                          .withValues(alpha: 0.1)
-                      : Theme.of(context).colorScheme.surface,
-                  borderRadius: BorderRadius.circular(12),
-                  elevation: isSelected ? 2 : 1,
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(12),
-                    onTap: () {
-                      setState(() {
-                        if (isSelected) {
-                          selectedPieces.remove(index);
-                        } else {
-                          selectedPieces.add(index);
-                        }
-                      });
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        border: Border.all(
-                          color: isSelected
-                              ? Theme.of(context).colorScheme.primary
-                              : Colors.transparent,
-                          width: 2,
-                        ),
+                child: Stack(
+                  children: [
+                    Material(
+                      color: isSelected
+                          ? Theme.of(context)
+                              .colorScheme
+                              .primary
+                              .withValues(alpha: 0.1)
+                          : Theme.of(context).colorScheme.surface,
+                      borderRadius: BorderRadius.circular(12),
+                      elevation: isSelected ? 2 : 1,
+                      child: InkWell(
                         borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            isSelected
-                                ? Icons.check_circle
-                                : Icons.radio_button_unchecked,
-                            color: isSelected
-                                ? Theme.of(context).colorScheme.primary
-                                : Theme.of(context)
-                                    .colorScheme
-                                    .onSurface
-                                    .withValues(alpha: 0.6),
+                        onTap: () {
+                          setState(() {
+                            if (isSelected) {
+                              selectedPieces.remove(index);
+                            } else {
+                              selectedPieces.add(index);
+                            }
+                          });
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            border: Border.all(
+                              color: isSelected
+                                  ? Theme.of(context).colorScheme.primary
+                                  : Colors.transparent,
+                              width: 2,
+                            ),
+                            borderRadius: BorderRadius.circular(12),
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Text(
-                              piece.text,
-                              style: TextStyle(
-                                fontSize: 16,
+                          child: Row(
+                            children: [
+                              Icon(
+                                isSelected
+                                    ? Icons.check_circle
+                                    : Icons.radio_button_unchecked,
                                 color: isSelected
                                     ? Theme.of(context).colorScheme.primary
-                                    : Theme.of(context).colorScheme.onSurface,
-                                fontWeight: isSelected
-                                    ? FontWeight.w500
-                                    : FontWeight.normal,
+                                    : Theme.of(context)
+                                        .colorScheme
+                                        .onSurface
+                                        .withValues(alpha: 0.6),
                               ),
-                            ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  piece.text,
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    color: isSelected
+                                        ? Theme.of(context).colorScheme.primary
+                                        : Theme.of(context).colorScheme.onSurface,
+                                    fontWeight: isSelected
+                                        ? FontWeight.w500
+                                        : FontWeight.normal,
+                                  ),
+                                ),
+                              ),
+                              if (showArrow) ...[
+                                const SizedBox(width: 8),
+                                Icon(
+                                  Icons.arrow_back,
+                                  color: Colors.green,
+                                  size: 24,
+                                ),
+                              ],
+                            ],
                           ),
-                        ],
+                        ),
                       ),
                     ),
-                  ),
+                  ],
                 ),
               );
             }).toList(),
@@ -181,6 +233,12 @@ class _TaskScreenState extends State<TaskScreen> {
             if (showFeedback) ...[
               const SizedBox(height: 24),
               Container(
+                key: (GuidedOnboarding.isActive &&
+                        widget.trackIndex == 0 &&
+                        widget.lessonIndex == 0 &&
+                        widget.scenarioIndex == 0)
+                    ? _feedbackKey
+                    : null,
                 decoration: BoxDecoration(
                   color: isCorrect
                       ? Colors.green.withValues(alpha: 0.1)
@@ -262,66 +320,165 @@ class _TaskScreenState extends State<TaskScreen> {
             ],
           ],
         ),
-      ),
-      bottomNavigationBar: SafeArea(
-        top: false,
-        bottom: true,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (scenarioDef.task == null) ...[
-                Text(
-                  'Task is being prepared',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context)
-                            .colorScheme
-                            .onSurface
-                            .withValues(alpha: 0.6),
-                      ),
-                ),
-                const SizedBox(height: 8),
-                const SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: null,
-                    child: Text('Try the Task'),
+          ),
+          if (isTaskIntro)
+            GuidedOverlay(
+              text:
+                  "Now it's your turn.\nYou'll see 10 options.\nSelect exactly 5 that belong in a strong prompt.",
+              highlightedKey: _taskGoalKey,
+              scrollController: _scrollController,
+              showContinueButton: true,
+              onContinue: () {
+                GuidedOnboarding.goTo(GuidedOnboardingStep.taskGuidance);
+                // Trigger rebuild to show the next overlay step
+                setState(() {});
+              },
+            )
+          else if (isTaskGuidance) ...[
+            // Message bubble only (no dimming of answers)
+            GuidedOverlay(
+              text:
+                  "These are the correct building blocks\nof a strong prompt.",
+              scrollController: _scrollController,
+              showDimmedOverlay: false, // Don't dim answers, keep them fully visible
+            ),
+            // Dim only the bottom buttons area
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: SafeArea(
+                top: false,
+                bottom: true,
+                child: IgnorePointer(
+                  ignoring: selectedPieces.length == requiredSelectionCount,
+                  child: Container(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.45),
+                    ),
+                    child: const SizedBox(height: 80), // Approximate button area height
                   ),
                 ),
-              ] else if (!showFeedback) ...[
-                Row(
+              ),
+            ),
+          ],
+          // Bottom buttons - positioned in Stack so overlay can cover them
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: SafeArea(
+              top: false,
+              bottom: true,
+              child: Container(
+                color: Theme.of(context).scaffoldBackgroundColor,
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: () => _skipTask(),
-                        child: const Text('Skip'),
+                    if (scenarioDef.task == null) ...[
+                      Text(
+                        'Task is being prepared',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurface
+                                  .withValues(alpha: 0.6),
+                            ),
                       ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: selectedPieces.length ==
-                                requiredSelectionCount
-                            ? _checkAnswer
-                            : null,
-                        child: const Text('Check My Answer'),
+                      const SizedBox(height: 8),
+                      const SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: null,
+                          child: Text('Try the Task'),
+                        ),
                       ),
-                    ),
+                    ] else if (!showFeedback) ...[
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: (isGuided ||
+                                      isTaskIntro ||
+                                      (isTaskGuidance &&
+                                          selectedPieces.length !=
+                                              requiredSelectionCount))
+                                  ? null
+                                  : () => _skipTask(),
+                              child: const Text('Skip'),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: (isTaskIntro ||
+                                      selectedPieces.length !=
+                                          requiredSelectionCount)
+                                  ? null
+                                  : _checkAnswer,
+                              child: const Text('Check My Answer'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ] else ...[
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          key: (GuidedOnboarding.isActive &&
+                                  widget.trackIndex == 0 &&
+                                  widget.lessonIndex == 0 &&
+                                  widget.scenarioIndex == 0)
+                              ? _doneButtonKey
+                              : null,
+                          onPressed: () => _completeTask(),
+                          child: const Text('Done'),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
-              ] else ...[
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: () => _completeTask(),
-                    child: const Text('Done'),
+              ),
+            ),
+          ),
+          // Dim the bottom buttons area during task intro (must be after buttons to cover them)
+          if (isTaskIntro)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: SafeArea(
+                top: false,
+                bottom: true,
+                child: IgnorePointer(
+                  ignoring: true,
+                  child: Container(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.45),
+                    ),
+                    child: const SizedBox(height: 80), // Approximate button area height
                   ),
                 ),
-              ],
-            ],
-          ),
-        ),
+              ),
+            ),
+          // Overlay for feedback display during guided onboarding
+          if (isGuided &&
+              showFeedback &&
+              widget.trackIndex == 0 &&
+              widget.lessonIndex == 0 &&
+              widget.scenarioIndex == 0)
+            GuidedOverlay(
+              text:
+                  "Here's your score and feedback.\nReview the results, then tap Done to continue.",
+              highlightedKey: _feedbackKey,
+              secondHighlightedKey: _doneButtonKey,
+              scrollController: _scrollController,
+              showContinueButton: false, // No continue button, user taps Done
+            ),
+        ],
       ),
     );
   }
@@ -376,6 +533,15 @@ class _TaskScreenState extends State<TaskScreen> {
           widget.lessonIndex,
           widget.scenarioIndex,
         );
+
+    // Progress guided onboarding if active
+    final isGuided = GuidedOnboarding.isActive &&
+        widget.trackIndex == 0 &&
+        widget.lessonIndex == 0 &&
+        widget.scenarioIndex == 0;
+    if (isGuided) {
+      GuidedOnboarding.goTo(GuidedOnboardingStep.resultsTakeaway);
+    }
 
     Navigator.pushReplacement(
       context,

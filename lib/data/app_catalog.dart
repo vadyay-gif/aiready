@@ -9,7 +9,7 @@ import 'tracks/track5_communication.dart';
 import 'tracks/track6_content_creation.dart';
 import 'tracks/track7_problem_solving_analysis.dart';
 import 'tracks/track8_decision_support.dart';
-import 'tracks/track9_creative_transformation.dart';
+import 'tracks/track9_brainstorming_strategy.dart';
 
 export 'app_catalog.dart'
     show kTracks, TrackDef, LessonDef, ScenarioDef, kScenariosPerTrack;
