@@ -1,7 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../data/app_catalog.dart';
-import '../services/guided_onboarding.dart';
+import '../services/guided_onboarding.dart' as OldService;
+import '../onboarding/guided_onboarding_controller.dart';
 import '../widgets/scenario_option_tile.dart';
 import '../widgets/guided_overlay.dart';
 import 'scenario_screen.dart';
@@ -36,8 +37,9 @@ class _ScenarioChoiceScreenState extends State<ScenarioChoiceScreen> {
     final lessonDef = trackDef.lessons[widget.lessonIndex];
     final scenarios = lessonDef.scenarios;
     final bottomInset = MediaQuery.of(context).padding.bottom;
-    final isGuided = GuidedOnboarding.isActive &&
-        GuidedOnboarding.step == GuidedOnboardingStep.scenarioSelection &&
+    // Use new controller as source of truth
+    final isGuided = GuidedOnboardingController.isActive &&
+        GuidedOnboardingController.currentStep == GuidedOnboardingStep.scenarioSelection &&
         widget.trackIndex == 0 &&
         widget.lessonIndex == 0; // Only for Track 1, Lesson 1
 
@@ -91,11 +93,12 @@ class _ScenarioChoiceScreenState extends State<ScenarioChoiceScreen> {
                                 title: scenario.title,
                                 subtitle: scenario.situation.split('.').first,
                                 icon: Icons.assignment_outlined,
-                                onTap: () {
+                                onTap: () async {
                                   if (!allowTap) return;
+                                  // CRITICAL: Advance onboarding BEFORE navigation so ScenarioScreen sees step 7
                                   if (isGuided && index == 0) {
-                                    GuidedOnboarding.goTo(
-                                        GuidedOnboardingStep.scenarioOverview);
+                                    await GuidedOnboardingController.next();
+                                    await Future.microtask(() {});
                                   }
                                   Navigator.push(
                                     context,
@@ -131,6 +134,16 @@ class _ScenarioChoiceScreenState extends State<ScenarioChoiceScreen> {
                   "Scenarios are real work situations\nwhere AI can help.",
               highlightedKey: _scenario1Key,
               scrollController: _scrollController,
+              currentStep: GuidedOnboardingController.getCurrentStepNumber(),
+              onPreviousStep: () async {
+                await GuidedOnboardingController.goBack();
+              },
+              onSkip: () async {
+                await GuidedOnboardingController.skip();
+                if (context.mounted) {
+                  Navigator.of(context).popUntil((route) => route.isFirst);
+                }
+              },
             ),
         ],
       ),

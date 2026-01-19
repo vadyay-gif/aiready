@@ -121,7 +121,7 @@ final List<TrackDef> kTracks = [
     lessons: buildTrack6Lessons(),
   ), // Track 6
   TrackDef(
-    title: 'Problem-Solving & Analysis',
+    title: 'Root-Cause Thinking',
     icon: Icons.psychology_outlined,
     lessons: buildTrack7Lessons(),
   ), // Track 7

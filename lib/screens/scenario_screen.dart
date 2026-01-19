@@ -4,7 +4,8 @@ import '../models/scenario.dart';
 import '../models/lesson.dart';
 import '../models/track.dart';
 import '../data/app_catalog.dart';
-import '../services/guided_onboarding.dart';
+import '../services/guided_onboarding.dart' as OldService;
+import '../onboarding/guided_onboarding_controller.dart';
 import '../widgets/guided_overlay.dart';
 import 'task_screen.dart';
 
@@ -41,7 +42,24 @@ class _ScenarioScreenState extends State<ScenarioScreen> {
   final GlobalKey _variantsKey = GlobalKey();
   final GlobalKey _proTipKey = GlobalKey();
   final ScrollController _scrollController = ScrollController();
-  int _currentSectionIndex = 0; // 0 = situation, 1 = prompt, 2 = response, 3 = variants, 4 = pro tip
+  
+  // Map step number (7-11) to section index (0-4)
+  int _getSectionIndexFromStep(int stepNumber) {
+    // Step 7 = situation (0), 8 = prompt (1), 9 = response (2), 10 = variants (3), 11 = proTip (4)
+    return stepNumber - 7;
+  }
+  
+  // Get current section index from controller step
+  int? _getCurrentSectionIndex() {
+    if (!GuidedOnboardingController.isActive) return null;
+    final currentStep = GuidedOnboardingController.currentStep;
+    if (currentStep != GuidedOnboardingStep.scenarioOverview) return null;
+    
+    final stepNumber = GuidedOnboardingController.getCurrentStepNumber();
+    if (stepNumber == null || stepNumber < 7 || stepNumber > 11) return null;
+    
+    return _getSectionIndexFromStep(stepNumber);
+  }
 
   @override
   void dispose() {
@@ -90,22 +108,6 @@ class _ScenarioScreenState extends State<ScenarioScreen> {
     return sections;
   }
   
-  void _nextSection() {
-    final trackDef = kTracks[widget.trackIndex];
-    final lessonDef = trackDef.lessons[widget.lessonIndex];
-    final scenarioDef = lessonDef.scenarios[widget.scenarioIndex];
-    final sections = _getSections(scenarioDef);
-    
-    if (_currentSectionIndex < sections.length - 1) {
-      setState(() {
-        _currentSectionIndex++;
-      });
-    } else {
-      // All sections viewed, progress to task
-      GuidedOnboarding.goTo(GuidedOnboardingStep.taskIntro);
-      setState(() {});
-    }
-  }
 
   @override
   void initState() {
@@ -211,11 +213,14 @@ class _ScenarioScreenState extends State<ScenarioScreen> {
       return true;
     }());
 
-    final isGuided = GuidedOnboarding.isActive &&
-        GuidedOnboarding.step == GuidedOnboardingStep.scenarioOverview &&
+    // Use new controller as source of truth
+    final isGuided = GuidedOnboardingController.isActive &&
+        GuidedOnboardingController.currentStep == GuidedOnboardingStep.scenarioOverview &&
         widget.trackIndex == 0 &&
         widget.lessonIndex == 0 &&
         widget.scenarioIndex == 0; // Only for Track 1, Lesson 1, Scenario 1
+    
+    final currentSectionIndex = _getCurrentSectionIndex();
 
     return Scaffold(
       appBar: AppBar(title: Text(scenarioDef.title)),
@@ -295,7 +300,7 @@ class _ScenarioScreenState extends State<ScenarioScreen> {
           ],
             ),
           ),
-          if (isGuided) ...[
+          if (isGuided && currentSectionIndex != null) ...[
             Builder(
               builder: (context) {
                 final trackDef = kTracks[widget.trackIndex];
@@ -303,21 +308,36 @@ class _ScenarioScreenState extends State<ScenarioScreen> {
                 final scenarioDef = lessonDef.scenarios[widget.scenarioIndex];
                 final sections = _getSections(scenarioDef);
                 
-                if (_currentSectionIndex >= sections.length) {
+                if (currentSectionIndex >= sections.length) {
                   // All sections viewed, no overlay needed
                   return const SizedBox.shrink();
                 }
                 
-                final currentSection = sections[_currentSectionIndex];
-                final isLastSection = _currentSectionIndex == sections.length - 1;
+                final currentSection = sections[currentSectionIndex];
+                final isLastSection = currentSectionIndex == sections.length - 1;
+                final stepNumber = GuidedOnboardingController.getCurrentStepNumber(scenarioSectionIndex: currentSectionIndex);
+                
                 return GuidedOverlay(
                   text: currentSection.explanation,
                   highlightedKey: currentSection.key,
                   secondHighlightedKey: isLastSection ? _taskButtonKey : null, // Also highlight button on last section
                   scrollController: _scrollController,
-                  showContinueButton: !isLastSection, // No Continue button on last section
+                  currentStep: stepNumber,
+                  onPreviousStep: () async {
+                    await GuidedOnboardingController.goBack();
+                  },
+                  onSkip: () async {
+                    await GuidedOnboardingController.skip();
+                    if (context.mounted) {
+                      Navigator.of(context).popUntil((route) => route.isFirst);
+                    }
+                  },
+                  showContinueButton: !isLastSection, // No Next button on last section (step 11)
                   continueButtonText: 'Next',
-                  onContinue: _nextSection,
+                  onContinue: () async {
+                    // Advance to next section (step 8, 9, 10, or 11)
+                    await GuidedOnboardingController.next();
+                  },
                 );
               },
             ),
@@ -335,19 +355,21 @@ class _ScenarioScreenState extends State<ScenarioScreen> {
               final lessonDef = trackDef.lessons[widget.lessonIndex];
               final scenarioDef = lessonDef.scenarios[widget.scenarioIndex];
               final sections = _getSections(scenarioDef);
-              // Button is visible when not guided, all sections viewed, or viewing the last section
+              // Button is visible when not guided, all sections viewed, or viewing the last section (step 11)
               final allSectionsViewed = !isGuided || 
-                  _currentSectionIndex >= sections.length ||
-                  (isGuided && _currentSectionIndex == sections.length - 1);
+                  (currentSectionIndex != null && currentSectionIndex >= sections.length) ||
+                  (isGuided && currentSectionIndex != null && currentSectionIndex == sections.length - 1);
               
               return SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
                   key: (isGuided && allSectionsViewed) ? _taskButtonKey : null,
                   onPressed: hasTask && allSectionsViewed
-                      ? () {
+                      ? () async {
+                          // CRITICAL: Advance onboarding to step 12 BEFORE navigation
                           if (isGuided) {
-                            GuidedOnboarding.goTo(GuidedOnboardingStep.taskIntro);
+                            await GuidedOnboardingController.next(); // Step 11 -> Step 12
+                            await Future.microtask(() {});
                           }
                           _navigateToTask();
                         }

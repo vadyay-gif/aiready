@@ -2,10 +2,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../models/track.dart';
 import '../services/progress_service.dart';
-import '../services/guided_onboarding.dart';
+import '../services/guided_onboarding.dart' as OldService;
 import '../widgets/lesson_bar.dart';
 import '../widgets/guided_overlay.dart';
 import '../data/app_catalog.dart';
+import '../onboarding/guided_onboarding_controller.dart';
 import 'scenario_choice_screen.dart';
 
 class TrackScreen extends StatefulWidget {
@@ -36,8 +37,9 @@ class _TrackScreenState extends State<TrackScreen> {
     final progressService = ProgressService();
     final media = MediaQuery.of(context)
         .copyWith(textScaler: const TextScaler.linear(1.0));
-    final isGuided = GuidedOnboarding.isActive &&
-        GuidedOnboarding.step == GuidedOnboardingStep.lessonSelection &&
+    // Use new controller as source of truth
+    final isGuided = GuidedOnboardingController.isActive &&
+        GuidedOnboardingController.currentStep == GuidedOnboardingStep.lessonSelection &&
         widget.trackIndex == 0; // Only for Track 1
 
     return MediaQuery(
@@ -54,6 +56,16 @@ class _TrackScreenState extends State<TrackScreen> {
                 text: "Lessons focus on one specific skill.\nChoose the first lesson.",
                 highlightedKey: _lesson1Key,
                 scrollController: _scrollController,
+                currentStep: GuidedOnboardingController.getCurrentStepNumber(),
+                onPreviousStep: () async {
+                  await GuidedOnboardingController.goBack();
+                },
+                onSkip: () async {
+                  await GuidedOnboardingController.skip();
+                  if (context.mounted) {
+                    Navigator.of(context).popUntil((route) => route.isFirst);
+                  }
+                },
               ),
           ],
         ),
@@ -88,8 +100,8 @@ class _TrackScreenState extends State<TrackScreen> {
                     separatorBuilder: (_, __) => const SizedBox(height: 12),
                     itemBuilder: (context, i) {
                       final lesson = lessons[i];
-                      final isGuided = GuidedOnboarding.isActive &&
-                          GuidedOnboarding.step ==
+                      final isGuided = GuidedOnboardingController.isActive &&
+                          GuidedOnboardingController.currentStep ==
                               GuidedOnboardingStep.lessonSelection &&
                           widget.trackIndex == 0;
                       final isGuidedTarget = isGuided && i == 0;
@@ -111,11 +123,12 @@ class _TrackScreenState extends State<TrackScreen> {
                                 subtitle: null, // subtitles are hidden in LessonBar
                                 progress: progress,
                                 icon: _getTrackIcon('t${widget.trackIndex + 1}'),
-                                onTap: () {
+                                onTap: () async {
                                   if (!allowTap) return;
+                                  // CRITICAL: Advance onboarding BEFORE navigation so ScenarioChoiceScreen sees step 6
                                   if (isGuided && i == 0) {
-                                    GuidedOnboarding.goTo(
-                                        GuidedOnboardingStep.scenarioSelection);
+                                    await GuidedOnboardingController.next();
+                                    await Future.microtask(() {});
                                   }
                                   _openLessonDetail(context, i);
                                 },
@@ -127,11 +140,12 @@ class _TrackScreenState extends State<TrackScreen> {
                             subtitle: null, // subtitles are hidden in LessonBar
                             progress: progress,
                             icon: _getTrackIcon('t${widget.trackIndex + 1}'),
-                            onTap: () {
+                            onTap: () async {
                               if (!allowTap) return;
+                              // CRITICAL: Advance onboarding BEFORE navigation so ScenarioChoiceScreen sees step 6
                               if (isGuided && i == 0) {
-                                GuidedOnboarding.goTo(
-                                    GuidedOnboardingStep.scenarioSelection);
+                                await GuidedOnboardingController.next();
+                                await Future.microtask(() {});
                               }
                               _openLessonDetail(context, i);
                             },

@@ -1,6 +1,6 @@
 import '../app_catalog.dart';
 
-/// Track 7 – Problem-Solving & Analysis (lessons 1–5)
+/// Track 7 – Root-Cause Thinking (lessons 1–5)
 List<LessonDef> buildTrack7Lessons() {
   return [
     LessonDef(

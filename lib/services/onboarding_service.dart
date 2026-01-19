@@ -1,24 +1,23 @@
 import 'package:shared_preferences/shared_preferences.dart';
+import '../onboarding/onboarding_state.dart';
 
 class OnboardingService {
-  // Bump version when the onboarding experience changes in a breaking way.
-  static const String _onboardingSeenKey = 'onboarding_seen_v3';
-
-  /// Check if onboarding has been seen
+  /// Check if onboarding has been seen (completed)
+  /// This is a convenience method that uses the centralized state.
   static Future<bool> hasSeenOnboarding() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_onboardingSeenKey) ?? false;
+    final status = await OnboardingState.loadOnboardingStatus();
+    return status.isCompleted;
   }
 
-  /// Mark onboarding as seen
+  /// Mark onboarding as seen (completed)
+  /// This is a convenience method that uses the centralized state.
   static Future<void> markOnboardingSeen() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_onboardingSeenKey, true);
+    await OnboardingState.markCompleted();
   }
 
   /// Reset onboarding (for replay functionality)
+  /// This is a convenience method that uses the centralized state.
   static Future<void> resetOnboarding() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_onboardingSeenKey, false);
+    await OnboardingState.reset();
   }
 }

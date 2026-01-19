@@ -3,16 +3,18 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/progress_store.dart';
 import '../services/tip_service.dart';
-import '../services/guided_onboarding.dart';
+// OldService import removed - HomeScreen now uses GuidedOnboardingController exclusively
 import '../widgets/track_tile.dart';
 import '../widgets/guided_overlay.dart';
 import '../theme/app_colors.dart';
 
 import '../data/app_catalog.dart';
 import '../main.dart';
+import '../onboarding/guided_onboarding_controller.dart';
 import 'track_screen.dart';
 import 'scenario_screen.dart';
 import 'settings_page.dart';
+import 'onboarding_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -81,47 +83,48 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     final media = MediaQuery.of(context)
         .copyWith(textScaler: const TextScaler.linear(1.0));
 
-    // Use validated tracks (soft-fail validation)
+    // Use validated tracks (soft-fail validation) - this is the source of truth
     final tracks = validatedTracks;
-    // TEMP: verify track count and order
-    // ignore: invalid_use_of_visible_for_testing_member
     if (kDebugMode) {
       debugPrint(
           '[HOME] tracks=${tracks.length} | titles=${tracks.map((t) => t.title).join(' | ')}');
     }
 
     // Always show 9 tracks with placeholders for missing ones
-    final requiredTitles = [
-      'Everyday Communication',
-      'Productivity & Workflow',
-      'Spreadsheets & Data',
-      'Presentations',
-      'Communication',
-      'Content Creation',
-      'Problem-Solving & Analysis',
-      'Decision Support',
-      'Brainstorming & Strategy',
-    ];
-
+    // Use tracks directly by index (0-8) instead of matching by title to avoid regressions
     final displayTracks = <TrackDef>[];
     for (int i = 0; i < 9; i++) {
-      final requiredTitle = requiredTitles[i];
-      final existingTrack =
-          tracks.where((t) => t.title == requiredTitle).firstOrNull;
-
-      if (existingTrack != null) {
-        displayTracks.add(existingTrack);
+      if (i < tracks.length) {
+        displayTracks.add(tracks[i]);
       } else {
-        // Create placeholder track
+        // Create placeholder track for missing indices
         displayTracks.add(TrackDef(
-          title: requiredTitle,
+          title: 'Track ${i + 1}',
           icon: Icons.help_outline,
           lessons: [],
         ));
       }
     }
 
-    final bool isGuided = GuidedOnboarding.isActive;
+    // Use the new GuidedOnboardingController as the source of truth
+    // CRITICAL: Read state directly from controller - state is set synchronously in start()
+    final bool isGuided = GuidedOnboardingController.isActive;
+    final currentStep = GuidedOnboardingController.currentStep;
+    final stepNumber = GuidedOnboardingController.getCurrentStepNumber();
+    
+    // Determine if GuidedOverlay should be rendered for steps that belong on HomeScreen
+    // Step 4 (trackSelection) and Step 15 (infoSettings) are shown on HomeScreen
+    final bool shouldShowOverlay = isGuided && 
+        (currentStep == GuidedOnboardingStep.trackSelection ||
+         currentStep == GuidedOnboardingStep.infoSettings);
+    
+    // Debug logging for onboarding state (kDebugMode only)
+    if (kDebugMode) {
+      final routeName = ModalRoute.of(context)?.settings.name ?? 'unknown';
+      debugPrint('[HOME_ONBOARDING] route=$routeName, isActive=$isGuided, '
+          'currentStep=$currentStep, stepNumber=$stepNumber, '
+          'shouldShowOverlay=$shouldShowOverlay');
+    }
 
     return MediaQuery(
       data: media,
@@ -210,11 +213,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                             }
 
                             final bool isGuidedTarget = isGuided &&
-                                GuidedOnboarding.step ==
+                                GuidedOnboardingController.currentStep ==
                                     GuidedOnboardingStep.trackSelection &&
                                 i == 0;
                             final bool allowTap = !isGuided ||
-                                GuidedOnboarding.step !=
+                                GuidedOnboardingController.currentStep !=
                                     GuidedOnboardingStep.trackSelection ||
                                 i == 0;
 
@@ -227,20 +230,26 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                       : const Color(0xFF3E7BFA),
                                   size: 44),
                               highlight: isGuidedTarget,
-                              onTap: () {
+                              onTap: () async {
                                 if (!allowTap) return;
                                 if (kDebugMode) {
                                   debugPrint('Open track: ${track.title}');
                                 }
                                 if (canOpen) {
-                                  if (isGuided &&
-                                      GuidedOnboarding.step ==
-                                          GuidedOnboardingStep
-                                              .trackSelection &&
-                                      i == 0) {
-                                    GuidedOnboarding.goTo(
-                                        GuidedOnboardingStep.lessonSelection);
+                                  // CRITICAL: Advance onboarding BEFORE navigation so TrackScreen sees step 5
+                                  final shouldAdvance = isGuided &&
+                                      GuidedOnboardingController.currentStep ==
+                                          GuidedOnboardingStep.trackSelection &&
+                                      i == 0;
+                                  
+                                  if (shouldAdvance) {
+                                    // Advance to step 5 immediately, then persist state
+                                    await GuidedOnboardingController.next();
+                                    // Wait a microtask to ensure state is persisted before navigation
+                                    await Future.microtask(() {});
                                   }
+                                  
+                                  // Navigate to TrackScreen (step 5 overlay will appear immediately)
                                   Navigator.push(
                                     context,
                                     MaterialPageRoute(
@@ -263,7 +272,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                           } else {
                             // 10th tile - Settings
                             final bool isGuidedTarget = isGuided &&
-                                GuidedOnboarding.step ==
+                                GuidedOnboardingController.currentStep ==
                                     GuidedOnboardingStep.infoSettings;
                             return TrackTile(
                               key: isGuidedTarget ? _settingsKey : null,
@@ -324,23 +333,47 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                   ),
                 ],
               ),
-              if (isGuided &&
-                  GuidedOnboarding.step ==
-                      GuidedOnboardingStep.trackSelection)
+              // CRITICAL: GuidedOverlay must be in the Stack to render on top
+              // It's conditionally added based on onboarding state
+              if (shouldShowOverlay && currentStep == GuidedOnboardingStep.trackSelection)
                 GuidedOverlay(
                   text:
                       "Tracks group lessons by theme.\nLet's start with everyday communication.",
                   highlightedKey: _track1Key,
                   scrollController: _scrollController,
+                  currentStep: stepNumber,
+                  onPreviousStep: () async {
+                    // Step 4 Previous: navigate to intro slide 3
+                    Navigator.pushReplacement(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const OnboardingScreen(initialPage: 2),
+                      ),
+                    );
+                  },
+                  onSkip: () async {
+                    // Step 4 Skip Onboarding
+                    await GuidedOnboardingController.skip();
+                    if (context.mounted) {
+                      Navigator.of(context).popUntil((route) => route.isFirst);
+                    }
+                  },
                 )
-              else if (isGuided &&
-                  GuidedOnboarding.step ==
-                      GuidedOnboardingStep.infoSettings)
+              else if (shouldShowOverlay && currentStep == GuidedOnboardingStep.infoSettings)
                 GuidedOverlay(
                   text:
                       'Here you can learn more about AI Ready\nand adjust basic settings.',
                   highlightedKey: _settingsKey,
                   scrollController: _scrollController,
+                  currentStep: stepNumber,
+                  onPreviousStep: null,
+                  onSkip: () async {
+                    // Step 15 Skip Onboarding
+                    await GuidedOnboardingController.skip();
+                    if (context.mounted) {
+                      Navigator.of(context).popUntil((route) => route.isFirst);
+                    }
+                  },
                 ),
             ],
           ),

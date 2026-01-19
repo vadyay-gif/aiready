@@ -7,7 +7,9 @@ import 'screens/home_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'repositories/lesson_repository.dart';
 import 'services/progress_store.dart';
-import 'services/onboarding_service.dart';
+import 'onboarding/onboarding_state.dart';
+import 'onboarding/guided_onboarding_controller.dart';
+import 'services/guided_onboarding.dart' as OldService;
 import 'data/app_catalog.dart';
 import 'dev/validators/content_validator.dart';
 
@@ -77,25 +79,65 @@ class _AppInitializer extends StatefulWidget {
 
 class _AppInitializerState extends State<_AppInitializer> {
   bool _isLoading = true;
-  bool _showOnboarding = false;
+  OnboardingStatus? _onboardingStatus;
 
   @override
   void initState() {
     super.initState();
-    _checkOnboardingStatus();
+    _initialize();
   }
 
-  Future<void> _checkOnboardingStatus() async {
-    final hasSeenOnboarding = await OnboardingService.hasSeenOnboarding();
-    setState(() {
-      _showOnboarding = !hasSeenOnboarding;
-      _isLoading = false;
-    });
+  Future<void> _initialize() async {
+    // Load onboarding status from centralized state manager
+    // This must happen BEFORE any routing decisions
+    final status = await OnboardingState.loadOnboardingStatus();
+    
+    if (kDebugMode) {
+      debugPrint('[APP_INIT] Onboarding status loaded:');
+      debugPrint('  - shouldShowIntro: ${status.shouldShowIntro}');
+      debugPrint('  - shouldShowGuided: ${status.shouldShowGuided}');
+      debugPrint('  - isCompleted: ${status.isCompleted}');
+      debugPrint('  - status: ${status.status}');
+    }
+    
+    // Initialize guided onboarding controller with the loaded status
+    await GuidedOnboardingController.initialize();
+    
+    // Initialize the old service for backward compatibility with screens that still use it
+    try {
+      await OldService.GuidedOnboarding.initialize();
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[APP_INIT] Could not initialize old onboarding service: $e');
+      }
+    }
+    
+    // If resuming from a step, restore it
+    if (status.shouldShowGuided && status.resumeStep != null) {
+      // Restore the step in GuidedOnboardingController
+      if (status.resumeStep! >= 0 && 
+          status.resumeStep! < GuidedOnboardingStep.values.length) {
+        await GuidedOnboardingController.goTo(
+          GuidedOnboardingStep.values[status.resumeStep!],
+        );
+      }
+    }
+    
+    if (mounted) {
+      setState(() {
+        _onboardingStatus = status;
+        _isLoading = false;
+      });
+      
+      if (kDebugMode) {
+        debugPrint('[APP_INIT] Routing decision: ${status.shouldShowIntro ? "OnboardingScreen" : "HomeScreen"}');
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_isLoading) {
+    if (_isLoading || _onboardingStatus == null) {
       return const Scaffold(
         body: Center(
           child: CircularProgressIndicator(),
@@ -103,6 +145,16 @@ class _AppInitializerState extends State<_AppInitializer> {
       );
     }
 
-    return _showOnboarding ? const OnboardingScreen() : const HomeScreen();
+    // Route based on onboarding status
+    if (_onboardingStatus!.shouldShowIntro) {
+      // Fresh install - show intro slides
+      return const OnboardingScreen();
+    } else if (_onboardingStatus!.shouldShowGuided) {
+      // Mid-onboarding - go to home screen where guided walkthrough will resume
+      return const HomeScreen();
+    } else {
+      // Completed - go to home screen
+      return const HomeScreen();
+    }
   }
 }

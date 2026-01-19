@@ -4,6 +4,7 @@ import '../data/app_catalog.dart';
 import '../services/progress_store.dart';
 import '../services/guided_onboarding.dart';
 import '../widgets/guided_overlay.dart';
+import '../onboarding/mobile_guided_bottom_sheet.dart';
 import 'scenario_complete_screen.dart';
 import 'scenario_incomplete_screen.dart';
 
@@ -84,7 +85,14 @@ class _TaskScreenState extends State<TaskScreen> {
             bottom: false,
             child: ListView(
               controller: _scrollController,
-              padding: EdgeInsets.fromLTRB(16, 16, 16, 24 + bottomInset),
+              padding: EdgeInsets.fromLTRB(
+                16, 
+                16, 
+                16, 
+                isTaskGuidance 
+                    ? MobileGuidedBottomSheet.getEstimatedHeight(context) + 16
+                    : (24 + bottomInset),
+              ),
               children: [
                 // Task Goal
                 Container(
