@@ -28,6 +28,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   final GlobalKey _track1Key = GlobalKey();
   final GlobalKey _settingsKey = GlobalKey();
   final ScrollController _scrollController = ScrollController();
+  bool _step4HighlightReady = false;
 
   @override
   void initState() {
@@ -221,16 +222,32 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                     GuidedOnboardingStep.trackSelection ||
                                 i == 0;
 
-                            return TrackTile(
-                              key: isGuidedTarget ? _track1Key : null,
+                            final trackTile = TrackTile(
+                              // Use a dedicated onboarding key applied directly to the Material root.
+                              // This guarantees the measured rect matches the true visual/tappable tile.
+                              onboardingKey: isGuidedTarget ? _track1Key : null,
                               title: track.title,
-                              icon: Icon(track.icon,
-                                  color: isPlaceholder
-                                      ? Colors.grey
-                                      : const Color(0xFF3E7BFA),
-                                  size: 44),
+                              icon: Icon(
+                                track.icon,
+                                color: isPlaceholder
+                                    ? Colors.grey
+                                    : const Color(0xFF3E7BFA),
+                                size: 44,
+                              ),
                               highlight: isGuidedTarget,
                               onTap: () async {
+                                // HARD LOCK STEP 4: when guided is active and step 4
+                                // highlight is not yet ready, ignore taps on Track 1.
+                                if (isGuidedTarget &&
+                                    GuidedOnboardingController.currentStep ==
+                                        GuidedOnboardingStep.trackSelection &&
+                                    !_step4HighlightReady) {
+                                  if (kDebugMode) {
+                                    debugPrint(
+                                        '[STEP4_LOCK] tap blocked (ready=false)');
+                                  }
+                                  return;
+                                }
                                 if (!allowTap) return;
                                 if (kDebugMode) {
                                   debugPrint('Open track: ${track.title}');
@@ -269,13 +286,14 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                 }
                               },
                             );
+                            return trackTile;
                           } else {
                             // 10th tile - Settings
                             final bool isGuidedTarget = isGuided &&
                                 GuidedOnboardingController.currentStep ==
                                     GuidedOnboardingStep.infoSettings;
                             return TrackTile(
-                              key: isGuidedTarget ? _settingsKey : null,
+                              onboardingKey: isGuidedTarget ? _settingsKey : null,
                               title: 'AI Ready Info and Settings',
                               icon: const Icon(
                                 Icons.settings_outlined,
@@ -283,7 +301,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                 size: 44,
                               ),
                               highlight: isGuidedTarget,
-                              onTap: () {
+                              onTap: () async {
+                                // CRITICAL: Advance onboarding to step 16 BEFORE navigation (same pattern as Steps 4, 6, 11)
+                                if (isGuidedTarget) {
+                                  await GuidedOnboardingController.next();
+                                  await Future.microtask(() {});
+                                }
                                 Navigator.push(
                                   context,
                                   MaterialPageRoute(
@@ -342,6 +365,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                   highlightedKey: _track1Key,
                   scrollController: _scrollController,
                   currentStep: stepNumber,
+                  onHighlightReadyChanged: (ready) {
+                    if (!mounted) return;
+                    setState(() {
+                      _step4HighlightReady = ready;
+                    });
+                  },
                   onPreviousStep: () async {
                     // Step 4 Previous: navigate to intro slide 3
                     Navigator.pushReplacement(
@@ -366,7 +395,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                   highlightedKey: _settingsKey,
                   scrollController: _scrollController,
                   currentStep: stepNumber,
-                  onPreviousStep: null,
+                  onPreviousStep: () async {
+                    await GuidedOnboardingController.goBack();
+                  },
                   onSkip: () async {
                     // Step 15 Skip Onboarding
                     await GuidedOnboardingController.skip();
@@ -374,6 +405,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                       Navigator.of(context).popUntil((route) => route.isFirst);
                     }
                   },
+                  // Step 15 is TAP-REQUIRED: NO Next button, show helper hint
+                  showContinueButton: false,
                 ),
             ],
           ),

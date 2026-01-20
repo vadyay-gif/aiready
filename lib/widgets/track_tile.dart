@@ -6,12 +6,18 @@ class TrackTile extends StatelessWidget {
   final VoidCallback? onTap;
   final bool highlight;
 
+  /// Optional key specifically for onboarding measurements.
+  /// This is applied directly to the Material root so its RenderBox
+  /// matches the visible/tappable tile bounds exactly.
+  final GlobalKey? onboardingKey;
+
   const TrackTile({
     super.key,
     required this.title,
     required this.icon,
     this.onTap,
     this.highlight = false,
+    this.onboardingKey,
   });
 
   @override
@@ -22,6 +28,7 @@ class TrackTile extends StatelessWidget {
         ?.copyWith(fontWeight: FontWeight.w700, height: 1.15);
 
     return Material(
+      key: onboardingKey,
       color: Colors.white,
       borderRadius: BorderRadius.circular(20),
       elevation: highlight ? 4 : 2,

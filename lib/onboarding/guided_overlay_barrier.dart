@@ -1,9 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/foundation.dart';
 import 'guided_overlay_geometry.dart';
+
+/// Debug toggle for onboarding logs and diagnostics.
+/// Set to true for verification builds; false for release.
+const bool kOnboardingDebug = true;
 
 /// Hit-test barrier that blocks all pointer events outside the cutout area.
 /// Uses custom RenderBox with hit testing to allow taps only within highlighted regions.
+/// NOTE: Bottom sheet area is excluded by Positioned constraint in GuidedOverlay,
+/// so this barrier never physically covers the bottom sheet area.
 class GuidedOverlayBarrier extends SingleChildRenderObjectWidget {
   const GuidedOverlayBarrier({
     super.key,
@@ -84,14 +91,20 @@ class _BarrierRenderBox extends RenderProxyBox {
       // Allow hit to pass through - don't add this box to result
       // This allows the underlying widget to receive the tap
       return false;
-    } else {
-      // Block hit - consume the event by adding this box to result
-      if (size.contains(position)) {
-        result.add(BoxHitTestEntry(this, position));
-        return true; // Consume the hit, preventing it from reaching underlying widgets
-      }
-      return false;
     }
+    
+    // Block hit - consume the event by adding this box to result
+    // NOTE: Bottom sheet area is excluded by Positioned constraint in GuidedOverlay
+    // (barrier is positioned with bottom: bottomSheetHeight), so this barrier
+    // never physically covers the bottom sheet area. No exclusion logic needed here.
+    if (size.contains(position)) {
+      if (kOnboardingDebug && kDebugMode) {
+        debugPrint('[BARRIER] Tapped at $position (blocked)');
+      }
+      result.add(BoxHitTestEntry(this, position));
+      return true; // Consume the hit, preventing it from reaching underlying widgets
+    }
+    return false;
   }
 
   @override

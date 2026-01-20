@@ -221,6 +221,14 @@ class _ScenarioScreenState extends State<ScenarioScreen> {
         widget.scenarioIndex == 0; // Only for Track 1, Lesson 1, Scenario 1
     
     final currentSectionIndex = _getCurrentSectionIndex();
+    
+    // DEBUG: Log Steps 7-11 state (temporary, removable)
+    if (kDebugMode && isGuided) {
+      final currentStep = GuidedOnboardingController.currentStep;
+      final stepNumber = GuidedOnboardingController.getCurrentStepNumber();
+      debugPrint('[SCENARIO_SCREEN Steps 7-11] currentStep: $currentStep, stepNumber: $stepNumber, '
+          'currentSectionIndex: $currentSectionIndex, isGuided: $isGuided');
+    }
 
     return Scaffold(
       appBar: AppBar(title: Text(scenarioDef.title)),
@@ -300,43 +308,74 @@ class _ScenarioScreenState extends State<ScenarioScreen> {
           ],
             ),
           ),
-          if (isGuided && currentSectionIndex != null) ...[
-            Builder(
-              builder: (context) {
-                final trackDef = kTracks[widget.trackIndex];
-                final lessonDef = trackDef.lessons[widget.lessonIndex];
-                final scenarioDef = lessonDef.scenarios[widget.scenarioIndex];
-                final sections = _getSections(scenarioDef);
-                
-                if (currentSectionIndex >= sections.length) {
-                  // All sections viewed, no overlay needed
-                  return const SizedBox.shrink();
-                }
-                
-                final currentSection = sections[currentSectionIndex];
-                final isLastSection = currentSectionIndex == sections.length - 1;
-                final stepNumber = GuidedOnboardingController.getCurrentStepNumber(scenarioSectionIndex: currentSectionIndex);
-                
-                return GuidedOverlay(
-                  text: currentSection.explanation,
-                  highlightedKey: currentSection.key,
-                  secondHighlightedKey: isLastSection ? _taskButtonKey : null, // Also highlight button on last section
-                  scrollController: _scrollController,
-                  currentStep: stepNumber,
-                  onPreviousStep: () async {
-                    await GuidedOnboardingController.goBack();
-                  },
-                  onSkip: () async {
-                    await GuidedOnboardingController.skip();
-                    if (context.mounted) {
-                      Navigator.of(context).popUntil((route) => route.isFirst);
+          if (isGuided) ...[
+            ValueListenableBuilder<GuidedOnboardingStep>(
+              valueListenable: GuidedOnboardingController.stepNotifier,
+              builder: (context, step, _) {
+                return ValueListenableBuilder<int>(
+                  valueListenable:
+                      GuidedOnboardingController.scenarioSectionNotifier,
+                  builder: (context, sectionIndex, __) {
+                    if (!isGuided ||
+                        step != GuidedOnboardingStep.scenarioOverview) {
+                      return const SizedBox.shrink();
                     }
-                  },
-                  showContinueButton: !isLastSection, // No Next button on last section (step 11)
-                  continueButtonText: 'Next',
-                  onContinue: () async {
-                    // Advance to next section (step 8, 9, 10, or 11)
-                    await GuidedOnboardingController.next();
+                    final trackDef = kTracks[widget.trackIndex];
+                    final lessonDef = trackDef.lessons[widget.lessonIndex];
+                    final scenarioDef =
+                        lessonDef.scenarios[widget.scenarioIndex];
+                    final sections = _getSections(scenarioDef);
+
+                    if (sectionIndex < 0 || sectionIndex >= sections.length) {
+                      // All sections viewed or invalid index, no overlay needed
+                      return const SizedBox.shrink();
+                    }
+
+                    final currentSection = sections[sectionIndex];
+                    final isLastSection =
+                        sectionIndex == sections.length - 1;
+                    final stepNumber =
+                        GuidedOnboardingController.getCurrentStepNumber();
+
+                    // DEBUG: Log section mapping and key/rect (temporary, removable)
+                    if (kDebugMode) {
+                      final keyContext = currentSection.key.currentContext;
+                      final hasKey = keyContext != null;
+                      debugPrint(
+                        '[SCENARIO_SCREEN Steps 7-11] stepNumber: $stepNumber, '
+                        'sectionIndex: $sectionIndex, '
+                        'sectionTitle: ${currentSection.title}, '
+                        'hasKey: $hasKey, isLastSection: $isLastSection',
+                      );
+                    }
+
+                    return GuidedOverlay(
+                      text: currentSection.explanation,
+                      highlightedKey: currentSection.key,
+                      secondHighlightedKey: isLastSection
+                          ? _taskButtonKey
+                          : null, // Also highlight button on last section
+                      scrollController: _scrollController,
+                      currentStep: stepNumber,
+                      onPreviousStep: () async {
+                        await GuidedOnboardingController.goBack();
+                      },
+                      onSkip: () async {
+                        await GuidedOnboardingController.skip();
+                        if (context.mounted) {
+                          Navigator.of(context)
+                              .popUntil((route) => route.isFirst);
+                        }
+                      },
+                      showContinueButton:
+                          !isLastSection, // No Next button on last section (step 11)
+                      continueButtonText: 'Next',
+                      onContinue: () async {
+                        // Advance to next scenario section (steps 7–10) without leaving scenarioOverview.
+                        await GuidedOnboardingController
+                            .advanceScenarioSection();
+                      },
+                    );
                   },
                 );
               },
@@ -355,27 +394,43 @@ class _ScenarioScreenState extends State<ScenarioScreen> {
               final lessonDef = trackDef.lessons[widget.lessonIndex];
               final scenarioDef = lessonDef.scenarios[widget.scenarioIndex];
               final sections = _getSections(scenarioDef);
-              // Button is visible when not guided, all sections viewed, or viewing the last section (step 11)
-              final allSectionsViewed = !isGuided || 
-                  (currentSectionIndex != null && currentSectionIndex >= sections.length) ||
-                  (isGuided && currentSectionIndex != null && currentSectionIndex == sections.length - 1);
-              
-              return SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  key: (isGuided && allSectionsViewed) ? _taskButtonKey : null,
-                  onPressed: hasTask && allSectionsViewed
-                      ? () async {
-                          // CRITICAL: Advance onboarding to step 12 BEFORE navigation
-                          if (isGuided) {
-                            await GuidedOnboardingController.next(); // Step 11 -> Step 12
-                            await Future.microtask(() {});
-                          }
-                          _navigateToTask();
-                        }
-                      : null,
-                  child: Text(hasTask ? 'Try the Task' : 'Task is being prepared'),
-                ),
+
+              return ValueListenableBuilder<int>(
+                valueListenable:
+                    GuidedOnboardingController.scenarioSectionNotifier,
+                builder: (context, sectionIndex, __) {
+                  final isScenarioOverview =
+                      GuidedOnboardingController.currentStep ==
+                          GuidedOnboardingStep.scenarioOverview;
+                  // Try the Task is enabled only when not guided OR
+                  // when in scenarioOverview on the last section (Pro Tip).
+                  final canTryTask = !isGuided ||
+                      (isScenarioOverview &&
+                          sectionIndex == sections.length - 1);
+
+                  return SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      key:
+                          (isGuided && canTryTask) ? _taskButtonKey : null,
+                      onPressed: hasTask && canTryTask
+                          ? () async {
+                              // CRITICAL: Advance from Pro Tip (step 11)
+                              // to taskIntro (step 12) BEFORE navigation.
+                              if (isGuided && isScenarioOverview) {
+                                await GuidedOnboardingController
+                                    .advanceFromProTipToTask();
+                                await Future.microtask(() {});
+                              }
+                              _navigateToTask();
+                            }
+                          : null,
+                      child: Text(
+                        hasTask ? 'Try the Task' : 'Task is being prepared',
+                      ),
+                    ),
+                  );
+                },
               );
             },
           ),

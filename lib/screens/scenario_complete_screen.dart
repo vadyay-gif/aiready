@@ -1,7 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../data/app_catalog.dart';
-import '../services/guided_onboarding.dart';
+import '../services/guided_onboarding.dart' as OldService;
+import '../onboarding/guided_onboarding_controller.dart';
 import '../widgets/guided_overlay.dart';
 import 'scenario_choice_screen.dart';
 
@@ -39,16 +40,19 @@ class _ScenarioCompleteScreenState extends State<ScenarioCompleteScreen> {
     final lessonDef = trackDef.lessons[widget.lessonIndex];
     final scenarioDef = lessonDef.scenarios[widget.scenarioIndex];
     final bottomInset = MediaQuery.of(context).padding.bottom;
-    final isGuided = GuidedOnboarding.isActive &&
-        GuidedOnboarding.step == GuidedOnboardingStep.resultsTakeaway &&
+    // Use new controller as source of truth
+    final isGuided = GuidedOnboardingController.isActive &&
+        GuidedOnboardingController.currentStep == GuidedOnboardingStep.resultsTakeaway &&
         widget.trackIndex == 0 &&
         widget.lessonIndex == 0 &&
         widget.scenarioIndex == 0;
+    final stepNumber = GuidedOnboardingController.getCurrentStepNumber();
 
     // Debug print for scenario complete
     if (kDebugMode) {
       debugPrint(
-          'Scenario complete -> takeaway shown: ${scenarioDef.takeaway.isNotEmpty}');
+          'Scenario complete -> takeaway shown: ${scenarioDef.takeaway.isNotEmpty} | '
+          'isGuided=$isGuided stepNumber=$stepNumber');
     }
 
     return Scaffold(
@@ -146,12 +150,39 @@ class _ScenarioCompleteScreenState extends State<ScenarioCompleteScreen> {
               },
             ),
           ),
-          if (isGuided)
+          if (isGuided && stepNumber == 14)
             GuidedOverlay(
               text:
                   "Each scenario ends with one key idea.\nThis is what you should remember.",
               highlightedKey: _takeawayKey,
               scrollController: _scrollController,
+              currentStep: stepNumber,
+              onPreviousStep: () async {
+                await GuidedOnboardingController.goBack();
+              },
+              onSkip: () async {
+                await GuidedOnboardingController.skip();
+                if (context.mounted) {
+                  Navigator.of(context).popUntil((route) => route.isFirst);
+                }
+              },
+              showContinueButton: true,
+              continueButtonText: 'Next',
+              onContinue: () async {
+                // Step 14 -> Step 15 (infoSettings on HomeScreen)
+                await GuidedOnboardingController.next();
+                await Future.microtask(() {});
+                if (kDebugMode) {
+                  final after =
+                      GuidedOnboardingController.getCurrentStepNumber();
+                  debugPrint(
+                      '[SCENARIO_COMPLETE] overlay active step=14 -> nextStep=$after');
+                }
+                if (kDebugMode) {
+                  debugPrint('[GUIDED_NAV] STEP14_NEXT nav=HomeScreen');
+                }
+                Navigator.popUntil(context, (route) => route.isFirst);
+              },
             ),
           // Bottom buttons - positioned in Stack so overlay can cover them
           Positioned(
@@ -230,15 +261,7 @@ class _ScenarioCompleteScreenState extends State<ScenarioCompleteScreen> {
   }
 
   void _navigateToTracks(BuildContext context) {
-    // Progress guided onboarding if active
-    final isGuided = GuidedOnboarding.isActive &&
-        GuidedOnboarding.step == GuidedOnboardingStep.resultsTakeaway &&
-        widget.trackIndex == 0 &&
-        widget.lessonIndex == 0 &&
-        widget.scenarioIndex == 0;
-    if (isGuided) {
-      GuidedOnboarding.goTo(GuidedOnboardingStep.infoSettings);
-    }
+    // Onboarding already advanced in onContinue above
     // Navigate back to home screen (track list)
     Navigator.popUntil(context, (route) => route.isFirst);
   }

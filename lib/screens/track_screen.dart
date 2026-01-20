@@ -2,11 +2,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../models/track.dart';
 import '../services/progress_service.dart';
-import '../services/guided_onboarding.dart' as OldService;
 import '../widgets/lesson_bar.dart';
 import '../widgets/guided_overlay.dart';
 import '../data/app_catalog.dart';
 import '../onboarding/guided_onboarding_controller.dart';
+import '../onboarding/guided_onboarding_navigation.dart';
 import 'scenario_choice_screen.dart';
 
 class TrackScreen extends StatefulWidget {
@@ -58,7 +58,7 @@ class _TrackScreenState extends State<TrackScreen> {
                 scrollController: _scrollController,
                 currentStep: GuidedOnboardingController.getCurrentStepNumber(),
                 onPreviousStep: () async {
-                  await GuidedOnboardingController.goBack();
+                  await handleGuidedPrevious(context);
                 },
                 onSkip: () async {
                   await GuidedOnboardingController.skip();
@@ -114,28 +114,9 @@ class _TrackScreenState extends State<TrackScreen> {
                           final isCompleted = snapshot.data ?? false;
                           final progress = isCompleted ? 1.0 : null;
 
-                          // Wrap with key if this is the target to ensure proper positioning
-                          if (isGuidedTarget) {
-                            return SizedBox(
-                              key: _lesson1Key,
-                              child: LessonBar(
-                                title: lesson.title,
-                                subtitle: null, // subtitles are hidden in LessonBar
-                                progress: progress,
-                                icon: _getTrackIcon('t${widget.trackIndex + 1}'),
-                                onTap: () async {
-                                  if (!allowTap) return;
-                                  // CRITICAL: Advance onboarding BEFORE navigation so ScenarioChoiceScreen sees step 6
-                                  if (isGuided && i == 0) {
-                                    await GuidedOnboardingController.next();
-                                    await Future.microtask(() {});
-                                  }
-                                  _openLessonDetail(context, i);
-                                },
-                              ),
-                            );
-                          }
+                          // Key must be on the tappable LessonBar surface (step 5 target)
                           return LessonBar(
+                            key: isGuidedTarget ? _lesson1Key : null,
                             title: lesson.title,
                             subtitle: null, // subtitles are hidden in LessonBar
                             progress: progress,

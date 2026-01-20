@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
 import '../data/app_catalog.dart';
 import '../services/progress_store.dart';
-import '../services/guided_onboarding.dart';
+import '../services/guided_onboarding.dart' as OldService;
+import '../onboarding/guided_onboarding_controller.dart';
 import '../widgets/guided_overlay.dart';
 import '../onboarding/mobile_guided_bottom_sheet.dart';
 import 'scenario_complete_screen.dart';
@@ -25,6 +27,7 @@ class TaskScreen extends StatefulWidget {
 }
 
 class _TaskScreenState extends State<TaskScreen> {
+  static const double kBottomActionBarHeightEstimate = 96;
   final Set<int> selectedPieces = <int>{};
   bool showFeedback = false;
   bool isCorrect = false;
@@ -33,8 +36,13 @@ class _TaskScreenState extends State<TaskScreen> {
   final GlobalKey _taskGoalKey = GlobalKey();
   final GlobalKey _feedbackKey = GlobalKey();
   final GlobalKey _doneButtonKey = GlobalKey();
+  final GlobalKey _promptPiecesKey = GlobalKey();
+  final GlobalKey _checkAnswerKey = GlobalKey();
   final Map<int, GlobalKey> _answerKeys = {};
   final ScrollController _scrollController = ScrollController();
+  int _taskPhase = 0; // 0 = goal intro, 1 = select prompt pieces
+  int? _lastStepNumber;
+  bool _phaseResetScheduled = false;
 
   @override
   void initState() {
@@ -67,14 +75,34 @@ class _TaskScreenState extends State<TaskScreen> {
     final requiredSelectionCount =
         promptPieces.where((piece) => piece.isCorrect).length;
     final selectedCount = selectedPieces.length;
-    final isGuided = GuidedOnboarding.isActive &&
+    // Use new controller as source of truth
+    final isGuided = GuidedOnboardingController.isActive &&
         widget.trackIndex == 0 &&
         widget.lessonIndex == 0 &&
         widget.scenarioIndex == 0;
-    final isTaskIntro = isGuided &&
-        GuidedOnboarding.step == GuidedOnboardingStep.taskIntro;
-    final isTaskGuidance = isGuided &&
-        GuidedOnboarding.step == GuidedOnboardingStep.taskGuidance;
+    final stepNumber = GuidedOnboardingController.getCurrentStepNumber();
+
+    // Reset phase deterministically when entering step 12 from any other step.
+    // Use a post-frame callback and a guard to avoid mutating state directly in build.
+    if (isGuided &&
+        stepNumber == 12 &&
+        _lastStepNumber != 12 &&
+        !_phaseResetScheduled) {
+      _phaseResetScheduled = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        setState(() {
+          _taskPhase = 0;
+        });
+        _phaseResetScheduled = false;
+      });
+      _lastStepNumber = 12;
+    } else if (stepNumber != _lastStepNumber) {
+      _lastStepNumber = stepNumber;
+    }
+
+    final isTaskIntro = isGuided && stepNumber == 12;
+    final isTaskGuidance = isGuided && stepNumber == 13;
 
     return Scaffold(
       appBar: AppBar(title: Text(scenarioDef.title)),
@@ -86,17 +114,20 @@ class _TaskScreenState extends State<TaskScreen> {
             child: ListView(
               controller: _scrollController,
               padding: EdgeInsets.fromLTRB(
-                16, 
-                16, 
-                16, 
-                isTaskGuidance 
-                    ? MobileGuidedBottomSheet.getEstimatedHeight(context) + 16
+                16,
+                16,
+                16,
+                // Reserve space for guided bottom sheet + action bar during guided steps
+                isGuided && (stepNumber == 12 || stepNumber == 13)
+                    ? MobileGuidedBottomSheet.getEstimatedHeight(context) +
+                        16 +
+                        kBottomActionBarHeightEstimate
                     : (24 + bottomInset),
               ),
               children: [
                 // Task Goal
-                Container(
-                  key: isTaskIntro ? _taskGoalKey : null,
+            Container(
+              key: _taskGoalKey,
                   decoration: BoxDecoration(
                     color: Theme.of(context).colorScheme.primaryContainer,
                     borderRadius: BorderRadius.circular(16),
@@ -129,28 +160,33 @@ class _TaskScreenState extends State<TaskScreen> {
             const SizedBox(height: 24),
 
             // Prompt Pieces
-            Text(
-              'Select the prompt pieces (choose exactly $requiredSelectionCount):',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
+            Container(
+              key: _promptPiecesKey,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Select the prompt pieces (choose exactly $requiredSelectionCount):',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
                   ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Selected: $selectedCount/$requiredSelectionCount',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: selectedCount == requiredSelectionCount
-                        ? Theme.of(context).colorScheme.secondary
-                        : Theme.of(context)
-                            .colorScheme
-                            .onSurface
-                            .withValues(alpha: 0.6),
-                    fontWeight: FontWeight.w500,
+                  const SizedBox(height: 6),
+                  Text(
+                    'Selected: $selectedCount/$requiredSelectionCount',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: selectedCount == requiredSelectionCount
+                              ? Theme.of(context).colorScheme.secondary
+                              : Theme.of(context)
+                                  .colorScheme
+                                  .onSurface
+                                  .withValues(alpha: 0.6),
+                          fontWeight: FontWeight.w500,
+                        ),
                   ),
-            ),
-            const SizedBox(height: 12),
+                  const SizedBox(height: 12),
 
-            ...promptPieces.asMap().entries.map((entry) {
+                  ...promptPieces.asMap().entries.map((entry) {
               final index = entry.key;
               final piece = entry.value;
               final isSelected = selectedPieces.contains(index);
@@ -236,15 +272,15 @@ class _TaskScreenState extends State<TaskScreen> {
                   ],
                 ),
               );
-            }).toList(),
+                  }).toList(),
+                ],
+              ),
+            ),
 
             if (showFeedback) ...[
               const SizedBox(height: 24),
               Container(
-                key: (GuidedOnboarding.isActive &&
-                        widget.trackIndex == 0 &&
-                        widget.lessonIndex == 0 &&
-                        widget.scenarioIndex == 0)
+                key: (isGuided && isTaskGuidance)
                     ? _feedbackKey
                     : null,
                 decoration: BoxDecoration(
@@ -331,149 +367,153 @@ class _TaskScreenState extends State<TaskScreen> {
           ),
           if (isTaskIntro)
             GuidedOverlay(
-              text:
-                  "Now it's your turn.\nYou'll see 10 options.\nSelect exactly 5 that belong in a strong prompt.",
-              highlightedKey: _taskGoalKey,
+              text: _taskPhase == 0
+                  ? "Now it's your turn.\nYou'll see several options.\nFirst, review the task goal."
+                  : "Next, select the correct prompt pieces\nand then tap \"Check My Answer\".",
+              highlightedKey:
+                  _taskPhase == 0 ? _taskGoalKey : _promptPiecesKey,
+              secondHighlightedKey:
+                  _taskPhase == 1 ? _checkAnswerKey : null,
               scrollController: _scrollController,
+              currentStep: stepNumber,
+              onPreviousStep: () async {
+                await GuidedOnboardingController.goBack();
+              },
+              onSkip: () async {
+                await GuidedOnboardingController.skip();
+                if (context.mounted) {
+                  Navigator.of(context).popUntil((route) => route.isFirst);
+                }
+              },
               showContinueButton: true,
-              onContinue: () {
-                GuidedOnboarding.goTo(GuidedOnboardingStep.taskGuidance);
-                // Trigger rebuild to show the next overlay step
-                setState(() {});
+              continueButtonText: 'Next',
+              onContinue: () async {
+                if (_taskPhase == 0) {
+                  setState(() {
+                    _taskPhase = 1;
+                  });
+                  if (kDebugMode) {
+                    debugPrint(
+                        '[TASK_ONBOARDING] phase=0(goal) -> phase=1(selectPieces)');
+                  }
+                } else {
+                  // Advance to step 13 (taskGuidance)
+                  await GuidedOnboardingController.next();
+                  if (kDebugMode) {
+                    final after =
+                        GuidedOnboardingController.getCurrentStepNumber();
+                    debugPrint(
+                        '[TASK_ONBOARDING] phase=1(selectPieces) -> advanceToStep=$after');
+                  }
+                }
               },
             )
-          else if (isTaskGuidance) ...[
-            // Message bubble only (no dimming of answers)
+          else if (isTaskGuidance)
+            // Step 13: Feedback overlay with Next button
             GuidedOverlay(
               text:
-                  "These are the correct building blocks\nof a strong prompt.",
+                  "Here's your score and feedback.\nReview the results, then tap Next to continue.",
+              highlightedKey: _feedbackKey,
               scrollController: _scrollController,
-              showDimmedOverlay: false, // Don't dim answers, keep them fully visible
+              currentStep: stepNumber,
+              onPreviousStep: () async {
+                await GuidedOnboardingController.goBack();
+              },
+              onSkip: () async {
+                await GuidedOnboardingController.skip();
+                if (context.mounted) {
+                  Navigator.of(context).popUntil((route) => route.isFirst);
+                }
+              },
+              showContinueButton: true,
+              continueButtonText: 'Next',
+              onContinue: () async {
+                // Advance to step 14 (resultsTakeaway) BEFORE navigation
+                await GuidedOnboardingController.next();
+                await Future.microtask(() {});
+                _navigateToResults();
+              },
             ),
-            // Dim only the bottom buttons area
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              child: SafeArea(
-                top: false,
-                bottom: true,
-                child: IgnorePointer(
-                  ignoring: selectedPieces.length == requiredSelectionCount,
-                  child: Container(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.45),
-                    ),
-                    child: const SizedBox(height: 80), // Approximate button area height
-                  ),
-                ),
-              ),
-            ),
-          ],
-          // Bottom buttons - positioned in Stack so overlay can cover them
+          // Bottom buttons - always visible
           Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: SafeArea(
-              top: false,
-              bottom: true,
-              child: Container(
-                color: Theme.of(context).scaffoldBackgroundColor,
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (scenarioDef.task == null) ...[
-                      Text(
-                        'Task is being prepared',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurface
-                                  .withValues(alpha: 0.6),
-                            ),
-                      ),
-                      const SizedBox(height: 8),
-                      const SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
-                          onPressed: null,
-                          child: Text('Try the Task'),
-                        ),
-                      ),
-                    ] else if (!showFeedback) ...[
-                      Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton(
-                              onPressed: (isGuided ||
-                                      isTaskIntro ||
-                                      (isTaskGuidance &&
-                                          selectedPieces.length !=
-                                              requiredSelectionCount))
-                                  ? null
-                                  : () => _skipTask(),
-                              child: const Text('Skip'),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: ElevatedButton(
-                              onPressed: (isTaskIntro ||
-                                      selectedPieces.length !=
-                                          requiredSelectionCount)
-                                  ? null
-                                  : _checkAnswer,
-                              child: const Text('Check My Answer'),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ] else ...[
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
-                          key: (GuidedOnboarding.isActive &&
-                                  widget.trackIndex == 0 &&
-                                  widget.lessonIndex == 0 &&
-                                  widget.scenarioIndex == 0)
-                              ? _doneButtonKey
-                              : null,
-                          onPressed: () => _completeTask(),
-                          child: const Text('Done'),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-          ),
-          // Dim the bottom buttons area during task intro (must be after buttons to cover them)
-          if (isTaskIntro)
-            Positioned(
               left: 0,
               right: 0,
               bottom: 0,
               child: SafeArea(
                 top: false,
                 bottom: true,
-                child: IgnorePointer(
-                  ignoring: true,
-                  child: Container(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.45),
-                    ),
-                    child: const SizedBox(height: 80), // Approximate button area height
+                child: Container(
+                  color: Theme.of(context).scaffoldBackgroundColor,
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (scenarioDef.task == null) ...[
+                        Text(
+                          'Task is being prepared',
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodySmall
+                              ?.copyWith(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurface
+                                    .withValues(alpha: 0.6),
+                              ),
+                        ),
+                        const SizedBox(height: 8),
+                        const SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton(
+                            onPressed: null,
+                            child: Text('Try the Task'),
+                          ),
+                        ),
+                      ] else if (!showFeedback) ...[
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: (isGuided && stepNumber == 12)
+                                    ? null
+                                    : () => _skipTask(),
+                                child: const Text('Skip'),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: ElevatedButton(
+                                key: _checkAnswerKey,
+                                onPressed: (isTaskIntro ||
+                                        selectedPieces.length !=
+                                            requiredSelectionCount)
+                                    ? null
+                                    : _checkAnswer,
+                                child: const Text('Check My Answer'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ] else ...[
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton(
+                            key: (isGuided && isTaskGuidance && showFeedback)
+                                ? _doneButtonKey
+                                : null,
+                            onPressed: () => _completeTask(),
+                            child: const Text('Done'),
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
               ),
             ),
-          // Overlay for feedback display during guided onboarding
-          if (isGuided &&
+          // Dim the bottom buttons area during task intro (must be after buttons to cover them)
+          // Overlay for feedback display during non-guided flow only
+          if (!isGuided &&
               showFeedback &&
               widget.trackIndex == 0 &&
               widget.lessonIndex == 0 &&
@@ -533,7 +573,7 @@ class _TaskScreenState extends State<TaskScreen> {
     );
   }
 
-  void _completeTask() {
+  void _navigateToResults() {
     // Mark scenario as completed in progress store
     final trackDef = kTracks[widget.trackIndex];
     context.read<ProgressStore>().setScenarioCompleted(
@@ -542,14 +582,29 @@ class _TaskScreenState extends State<TaskScreen> {
           widget.scenarioIndex,
         );
 
-    // Progress guided onboarding if active
-    final isGuided = GuidedOnboarding.isActive &&
-        widget.trackIndex == 0 &&
-        widget.lessonIndex == 0 &&
-        widget.scenarioIndex == 0;
-    if (isGuided) {
-      GuidedOnboarding.goTo(GuidedOnboardingStep.resultsTakeaway);
-    }
+    // Progress guided onboarding if active (already advanced in onContinue above)
+    // This method is called after step 13 -> 14 advancement
+
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ScenarioCompleteScreen(
+          trackIndex: widget.trackIndex,
+          lessonIndex: widget.lessonIndex,
+          scenarioIndex: widget.scenarioIndex,
+        ),
+      ),
+    );
+  }
+
+  void _completeTask() {
+    // Mark scenario as completed in progress store
+    final trackDef = kTracks[widget.trackIndex];
+    context.read<ProgressStore>().setScenarioCompleted(
+          trackDef.title,
+          widget.lessonIndex,
+          widget.scenarioIndex,
+        );
 
     Navigator.pushReplacement(
       context,

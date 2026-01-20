@@ -7,6 +7,10 @@ import '../onboarding/mobile_guided_bottom_sheet.dart';
 import '../ui/adaptive/adaptive_dimensions.dart';
 import '../ui/platform/ui_track.dart';
 
+/// Debug toggle for onboarding logs and diagnostics.
+/// Set to true for verification builds; false for release.
+const bool kOnboardingDebug = true;
+
 /// Guided onboarding overlay widget for steps 4-16.
 /// Supports both simple mode (legacy) and advanced mode (steps 4-16 with bottom sheet).
 class GuidedOverlay extends StatefulWidget {
@@ -27,6 +31,7 @@ class GuidedOverlay extends StatefulWidget {
     this.onPreviousStep,
     this.onSkip,
     this.child,
+    this.onHighlightReadyChanged,
   });
 
   final String text;
@@ -44,6 +49,10 @@ class GuidedOverlay extends StatefulWidget {
   final VoidCallback? onPreviousStep;
   final VoidCallback? onSkip;
   final Widget? child;
+  // Optional callback to notify when the current highlight rect becomes ready/unready.
+  // Used by hosting screens (e.g., HomeScreen step 4) to hard-lock taps until
+  // the overlay geometry is fully measured.
+  final ValueChanged<bool>? onHighlightReadyChanged;
 
   @override
   State<GuidedOverlay> createState() => _GuidedOverlayState();
@@ -54,6 +63,16 @@ class _GuidedOverlayState extends State<GuidedOverlay> {
   bool _isSyncing = false;
   int _syncToken = 0;
   double? _bottomSheetHeight;
+  final GlobalKey _bottomSheetKey = GlobalKey();
+  // Paint surface key for the dimmed overlay CustomPaint (single source of truth for coordinate space)
+  final GlobalKey _paintSurfaceKey = GlobalKey();
+  bool _measurementScheduled = false; // Guard against measurement loops
+  bool _lastHighlightReady = false;
+
+  // Step 4 readiness gating – limit how many frames we wait for HomeScreen/target/paint
+  // to be fully laid out before attempting measurement.
+  int _step4ReadinessAttempts = 0;
+  static const int _maxStep4ReadinessAttempts = 20;
 
   // Determine if we're in advanced mode (steps 4-16)
   bool get _isAdvancedMode => widget.currentStep != null && widget.currentStep! >= 4 && widget.currentStep! <= 16;
@@ -63,7 +82,10 @@ class _GuidedOverlayState extends State<GuidedOverlay> {
   void initState() {
     super.initState();
     if (_isAdvancedMode) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _syncToStep());
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _scheduleMeasurement();
+        _syncToStep();
+      });
     }
   }
 
@@ -72,8 +94,59 @@ class _GuidedOverlayState extends State<GuidedOverlay> {
     super.didUpdateWidget(oldWidget);
     // Freeze fix: only skip sync if step didn't change
     if (_isAdvancedMode && oldWidget.currentStep != widget.currentStep) {
-      // Step changed - always resync even if currently syncing
-      WidgetsBinding.instance.addPostFrameCallback((_) => _syncToStep());
+      // If we are leaving step 4, clear highlight readiness so hosts can lock taps again.
+      if (oldWidget.currentStep == 4 && widget.currentStep != 4) {
+        _updateHighlightReady(false);
+      }
+      // Step changed - re-measure bottom sheet (button visibility may change height) and resync
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _scheduleMeasurement();
+        _syncToStep();
+      });
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Handle orientation changes: re-measure bottom sheet height and re-sync when metrics change
+    if (_isAdvancedMode) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _scheduleMeasurement();
+        _syncToStep();
+      });
+    }
+  }
+  
+  /// Measure the actual rendered height of the bottom sheet.
+  /// Called after layout to get accurate height for barrier positioning.
+  /// Debounced: only setState if height changed by >1px to prevent loops.
+  void _measureBottomSheetHeight() {
+    if (!mounted) return;
+    _measurementScheduled = false; // Clear flag when measurement runs
+    
+    final box = _bottomSheetKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box != null && box.hasSize) {
+      final measuredHeight = box.size.height;
+      // Only update if height changed by more than 1 logical pixel
+      if (_bottomSheetHeight == null || 
+          (measuredHeight - _bottomSheetHeight!).abs() > 1.0) {
+        if (kOnboardingDebug && kDebugMode) {
+          debugPrint('[GUIDED_OVERLAY] Measured bottom sheet height: $measuredHeight (was: $_bottomSheetHeight)');
+        }
+        setState(() {
+          _bottomSheetHeight = measuredHeight;
+        });
+      }
+    }
+    // If not yet laid out, don't set estimated height - use 0.0 fallback in build()
+  }
+  
+  /// Schedule a bottom sheet height measurement (debounced).
+  void _scheduleMeasurement() {
+    if (!_measurementScheduled && mounted) {
+      _measurementScheduled = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _measureBottomSheetHeight());
     }
   }
 
@@ -84,16 +157,17 @@ class _GuidedOverlayState extends State<GuidedOverlay> {
     
     if (!mounted || currentToken != _syncToken) return;
     
-    // Step 4 is in a Grid - wait for 2 frames + small delay for stability
+    // Wait for layout to settle (all steps use same timing)
     final stepNumber = widget.currentStep ?? 4;
+    await WidgetsBinding.instance.endOfFrame;
+    await WidgetsBinding.instance.endOfFrame;
+    
+    // For step 4 (Grid layout), wait additional frame if key not ready
     if (stepNumber == 4) {
-      await WidgetsBinding.instance.endOfFrame;
-      await WidgetsBinding.instance.endOfFrame;
-      await Future.delayed(const Duration(milliseconds: 80));
-    } else {
-      // Other steps: wait for 2 frames
-      await WidgetsBinding.instance.endOfFrame;
-      await WidgetsBinding.instance.endOfFrame;
+      final targetKey = widget.highlightedKey ?? widget.secondHighlightedKey;
+      if (targetKey?.currentContext == null) {
+        await WidgetsBinding.instance.endOfFrame;
+      }
     }
     
     if (!mounted || currentToken != _syncToken) return;
@@ -110,47 +184,91 @@ class _GuidedOverlayState extends State<GuidedOverlay> {
     
     if (!mounted || currentToken != _syncToken) return;
     
-    // Measure target rect with stability check for step 4
-    Rect? measuredRect;
+    // STEP 4 READINESS GATE: ensure HomeScreen + target + paint surface are ready.
     if (stepNumber == 4) {
-      // Step 4: measure until stable (<= 2px delta across 2 frames)
-      Rect? prevRect;
-      for (int i = 0; i < 5; i++) {
-        await WidgetsBinding.instance.endOfFrame;
-        if (!mounted || currentToken != _syncToken) return;
-        
-        final currentRect = _getRectForKey(widget.highlightedKey ?? widget.secondHighlightedKey);
-        if (currentRect == null) {
-          // Not measurable yet, retry next frame
-          continue;
+      final targetKey = widget.highlightedKey ?? widget.secondHighlightedKey;
+      final ready = _isStep4Ready(targetKey);
+
+      if (!ready) {
+        _step4ReadinessAttempts++;
+        if (kOnboardingDebug && kDebugMode) {
+          debugPrint(
+            '[STEP 4 READY] Gate NOT ready (attempt $_step4ReadinessAttempts/$_maxStep4ReadinessAttempts). '
+            'Scheduling next frame.',
+          );
         }
-        
-        if (prevRect != null) {
-          final deltaX = (currentRect.left - prevRect.left).abs();
-          final deltaY = (currentRect.top - prevRect.top).abs();
-          if (deltaX <= 2 && deltaY <= 2) {
-            // Stable - use this rect
+
+        if (_step4ReadinessAttempts <= _maxStep4ReadinessAttempts) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted || currentToken != _syncToken) return;
+            _syncToStep();
+          });
+        } else {
+          if (kOnboardingDebug && kDebugMode) {
+            debugPrint('[STEP 4 READY] Gate FAILED after $_step4ReadinessAttempts attempts. '
+                'Giving up on measurement for this session.');
+          }
+          if (mounted && currentToken == _syncToken) {
+            setState(() {
+              _isSyncing = false;
+            });
+          }
+        }
+        return;
+      } else {
+        if (kOnboardingDebug && kDebugMode) {
+          debugPrint(
+            '[STEP 4 READY] Gate PASSED (attempt $_step4ReadinessAttempts). '
+            'Proceeding to stable rect measurement.',
+          );
+        }
+      }
+    }
+
+    // Measure target rect - UNIFIED pipeline for all steps (4-16)
+    // Retry until rect is stable (<= 2px delta) or attempts exhausted.
+    // This restores the stable-rect behavior required for grids/lists.
+    Rect? measuredRect;
+    final targetKey = widget.highlightedKey ?? widget.secondHighlightedKey;
+    
+    // Stable measurement loop: up to 5 attempts, accept when delta <= 2 on all components
+    Rect? previousRect;
+    for (int attempt = 0; attempt < 5; attempt++) {
+      if (!mounted || currentToken != _syncToken) return;
+      
+      final currentRect = _getRectForKey(targetKey);
+      if (currentRect != null) {
+        if (previousRect != null) {
+          final deltaX = (currentRect.left - previousRect.left).abs();
+          final deltaY = (currentRect.top - previousRect.top).abs();
+          final deltaW = (currentRect.width - previousRect.width).abs();
+          final deltaH = (currentRect.height - previousRect.height).abs();
+          
+          if (deltaX <= 2 && deltaY <= 2 && deltaW <= 2 && deltaH <= 2) {
+            // Stable rect - accept and stop
             measuredRect = currentRect;
             break;
           }
         }
-        prevRect = currentRect;
+        previousRect = currentRect;
       }
-      // Use last measured rect if stability not achieved
-      measuredRect ??= prevRect;
-    } else {
-      // Other steps: single measurement
-      measuredRect = _getRectForKey(widget.highlightedKey ?? widget.secondHighlightedKey);
+      
+      // Wait for next frame before re-measuring
+      await WidgetsBinding.instance.endOfFrame;
     }
     
     _targetRect = measuredRect;
-    
-    // DEBUG: Log Step 4 rect measurement (temporary, removable)
-    // Note: _overlayKey is in _DimmedOverlay, not accessible here. Logging will be done in painter if needed.
-    if (kDebugMode && stepNumber == 4 && _targetRect != null) {
-      final screenSize = MediaQuery.of(context).size;
-      final devicePixelRatio = MediaQuery.of(context).devicePixelRatio;
-      debugPrint('[GUIDED_OVERLAY Step 4] globalRect: ${_targetRect.toString()}, screenSize: $screenSize, devicePixelRatio: $devicePixelRatio');
+    if (stepNumber == 4) {
+      if (measuredRect != null) {
+        // Reset attempts once we have a usable rect
+        _step4ReadinessAttempts = 0;
+        _updateHighlightReady(true);
+      } else {
+        _updateHighlightReady(false);
+      }
+    } else {
+      // Any non-step-4 step clears the step 4 readiness flag
+      _updateHighlightReady(false);
     }
     
     if (mounted && currentToken == _syncToken) {
@@ -158,6 +276,57 @@ class _GuidedOverlayState extends State<GuidedOverlay> {
         _isSyncing = false;
       });
     }
+  }
+
+  void _updateHighlightReady(bool ready) {
+    if (_lastHighlightReady == ready) return;
+    _lastHighlightReady = ready;
+    if (widget.onHighlightReadyChanged != null) {
+      if (kOnboardingDebug && kDebugMode) {
+        debugPrint('[STEP4_LOCK] ready=$ready');
+      }
+      widget.onHighlightReadyChanged!(ready);
+    }
+  }
+
+  @override
+  void dispose() {
+    // Ensure readiness flag is cleared when overlay is disposed.
+    _updateHighlightReady(false);
+    super.dispose();
+  }
+
+  /// Step 4 readiness check: require non-null contexts and non-zero sizes for
+  /// both the target RenderBox and the paint surface RenderBox.
+  bool _isStep4Ready(GlobalKey? targetKey) {
+    if (targetKey?.currentContext == null) {
+      if (kOnboardingDebug && kDebugMode) {
+        debugPrint('[STEP 4 READY] targetKey.currentContext is null');
+      }
+      return false;
+    }
+    if (_paintSurfaceKey.currentContext == null) {
+      if (kOnboardingDebug && kDebugMode) {
+        debugPrint('[STEP 4 READY] _paintSurfaceKey.currentContext is null');
+      }
+      return false;
+    }
+
+    final targetBox = targetKey!.currentContext!.findRenderObject() as RenderBox?;
+    final paintBox = _paintSurfaceKey.currentContext!.findRenderObject() as RenderBox?;
+
+    final targetReady = targetBox != null && targetBox.hasSize && targetBox.size.width > 0 && targetBox.size.height > 0;
+    final paintReady = paintBox != null && paintBox.hasSize && paintBox.size.width > 0 && paintBox.size.height > 0;
+
+    if (kOnboardingDebug && kDebugMode) {
+      debugPrint(
+        '[STEP 4 READY] readiness check: '
+        'targetReady=$targetReady (box=$targetBox), '
+        'paintReady=$paintReady (box=$paintBox)',
+      );
+    }
+
+    return targetReady && paintReady;
   }
 
   Future<void> _ensureTargetVisible() async {
@@ -193,6 +362,12 @@ class _GuidedOverlayState extends State<GuidedOverlay> {
     );
     
     await WidgetsBinding.instance.endOfFrame;
+    
+    // DEBUG: Log Steps 7-11 auto-scroll (temporary, removable)
+    if (kOnboardingDebug && kDebugMode && stepNumber >= 7 && stepNumber <= 11) {
+      final scrollOffset = widget.scrollController?.offset ?? 0;
+      debugPrint('[GUIDED_OVERLAY Steps 7-11] After ensureVisible for step $stepNumber, scrollOffset: $scrollOffset');
+    }
   }
 
   Future<void> _verifyTargetAboveBottomSheet() async {
@@ -258,51 +433,137 @@ class _GuidedOverlayState extends State<GuidedOverlay> {
     }
   }
 
+  /// Measure the rect for a target key in the paint surface's local coordinate space.
+  /// Returns null if either the target or the paint surface is not ready.
   Rect? _getRectForKey(GlobalKey? key) {
     if (key?.currentContext == null) return null;
-    final renderBox = key!.currentContext!.findRenderObject() as RenderBox?;
-    if (renderBox == null || !renderBox.hasSize) return null;
+    if (_paintSurfaceKey.currentContext == null) return null;
     
-    // Get global position of target
-    final globalPosition = renderBox.localToGlobal(Offset.zero);
+    final targetBox = key!.currentContext!.findRenderObject() as RenderBox?;
+    final paintBox = _paintSurfaceKey.currentContext!.findRenderObject() as RenderBox?;
+    if (targetBox == null || !targetBox.hasSize || paintBox == null || !paintBox.hasSize) {
+      return null;
+    }
     
-    // For advanced mode, the rect will be converted in the painter using overlayKey
-    // Return global coordinates here - the painter will convert using _overlayKey
-    // This matches the legacy mode behavior where conversion happens in the painter
-    return Rect.fromLTWH(
-      globalPosition.dx,
-      globalPosition.dy,
-      renderBox.size.width,
-      renderBox.size.height,
-    );
+    // Global bounds of the target
+    final globalTopLeft = targetBox.localToGlobal(Offset.zero);
+    final globalBottomRight = targetBox.localToGlobal(targetBox.size.bottomRight(Offset.zero));
+    
+    // Convert once into the paint surface's local coordinate space
+    final localTopLeft = paintBox.globalToLocal(globalTopLeft);
+    final localBottomRight = paintBox.globalToLocal(globalBottomRight);
+    final localRect = Rect.fromPoints(localTopLeft, localBottomRight);
+
+    // STEP 4 DIAGNOSTICS: log both global and local rect plus canvas size + DPR,
+    // but only when guided onboarding is active and we're on step 4.
+    if (kOnboardingDebug && kDebugMode) {
+      final isStep4 = GuidedOnboardingController.isActive &&
+          GuidedOnboardingController.currentStep == GuidedOnboardingStep.trackSelection;
+      if (isStep4) {
+        final paintSize = paintBox.size;
+        final dpr = WidgetsBinding.instance.platformDispatcher.views.isNotEmpty
+            ? WidgetsBinding.instance.platformDispatcher.views.first.devicePixelRatio
+            : 1.0;
+        debugPrint(
+          '[STEP 4 DEBUG] globalRect: '
+          '(${globalTopLeft.dx}, ${globalTopLeft.dy}) -> '
+          '(${globalBottomRight.dx}, ${globalBottomRight.dy}), '
+          'localRect: $localRect, '
+          'paintSurfaceSize: $paintSize, '
+          'devicePixelRatio: $dpr',
+        );
+      }
+    }
+
+    return localRect;
   }
 
   @override
   Widget build(BuildContext context) {
     // Advanced mode: steps 4-16 with bottom sheet
     if (_isAdvancedMode && _shouldUseBottomSheet) {
+      // Use measured height if available, otherwise use 0.0 (safe fallback)
+      // Bottom sheet is Layer 3 (always on top), so it remains tappable even if barrier covers full screen
+      final excludeHeight = _bottomSheetHeight ?? 0.0;
+      
+      // Schedule measurement after this build completes (debounced)
+      _scheduleMeasurement();
+      
       return Stack(
         children: [
-          // Child content
+          // LAYER 1: Child content (app content - tap-blocked by barrier)
           if (widget.child != null) widget.child!,
-          // Dimmed overlay
-          if (widget.showDimmedOverlay)
+          
+          // LAYER 2: Dimmed overlay + Barrier (blocks taps to app content only)
+          // IMPORTANT: Barrier does NOT cover bottom sheet area
+          if (widget.showDimmedOverlay) ...[
+            // Visual scrim (full screen for visual effect, NON-INTERACTIVE)
             Positioned.fill(
-              child: _DimmedOverlay(
-                targetRect: _targetRect,
+              child: IgnorePointer(
+                ignoring: true, // Scrim is purely visual - does not intercept taps
+                child: _DimmedOverlay(
+                  targetRect: _targetRect,
+                  paintSurfaceKey: _paintSurfaceKey,
+                ),
               ),
             ),
-          // Barrier (blocks taps outside cutout)
-          if (widget.showDimmedOverlay && (widget.highlightedKey != null || widget.secondHighlightedKey != null))
-            Positioned.fill(
-              child: GuidedOverlayBarrier(
-                targetKey: widget.highlightedKey ?? widget.secondHighlightedKey!,
-                secondTargetKey: widget.highlightedKey != null ? widget.secondHighlightedKey : null,
-                child: const SizedBox.expand(),
+
+            // DEBUG ONLY: Draw a visible border for Step 4 using the same local rect as the cutout
+            if (kOnboardingDebug &&
+                widget.currentStep != null &&
+                widget.currentStep == 4 &&
+                _targetRect != null) ...[
+              // Debug log for Step 4 rect and paint surface size
+              Builder(
+                builder: (context) {
+                  if (kOnboardingDebug && kDebugMode) {
+                    final paintBox = _paintSurfaceKey.currentContext?.findRenderObject() as RenderBox?;
+                    final paintSize = paintBox?.size ?? Size.zero;
+                    debugPrint(
+                      '[STEP 4 DEBUG] _targetRect (local): $_targetRect, '
+                      'paintSurfaceSize: $paintSize',
+                    );
+                  }
+                  return const SizedBox.shrink();
+                },
               ),
-            ),
-          // Bottom sheet (rendered last to be on top)
+              Positioned(
+                left: _targetRect!.left,
+                top: _targetRect!.top,
+                width: _targetRect!.width,
+                height: _targetRect!.height,
+                child: IgnorePointer(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      border: Border.all(
+                        color: Colors.redAccent,
+                        width: 2,
+                      ),
+                      // Semi-transparent fill so the debug area is clearly visible.
+                      color: Colors.redAccent.withOpacity(0.18),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+            // Tap blocker (excludes bottom sheet area - only covers content above sheet)
+            if (widget.highlightedKey != null || widget.secondHighlightedKey != null)
+              Positioned(
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: excludeHeight, // Exclude bottom sheet area (0.0 until measured)
+                child: GuidedOverlayBarrier(
+                  targetKey: widget.highlightedKey ?? widget.secondHighlightedKey!,
+                  secondTargetKey: widget.highlightedKey != null ? widget.secondHighlightedKey : null,
+                  child: const SizedBox.expand(),
+                ),
+              ),
+          ],
+          
+          // LAYER 3: Bottom sheet (ALWAYS on top, NEVER blocked)
           MobileGuidedBottomSheet(
+            key: _bottomSheetKey, // Key for measuring actual rendered height
             text: widget.text,
             stepNumber: widget.currentStep,
             showContinueButton: widget.showContinueButton,
@@ -350,20 +611,20 @@ class _DimmedOverlay extends StatefulWidget {
     this.secondHighlightedKey,
     this.scrollController,
     this.targetRect,
+    this.paintSurfaceKey,
   });
 
   final GlobalKey? highlightedKey;
   final GlobalKey? secondHighlightedKey;
   final ScrollController? scrollController;
   final Rect? targetRect; // For advanced mode
+  final GlobalKey? paintSurfaceKey; // Paint surface key from GuidedOverlay
 
   @override
   State<_DimmedOverlay> createState() => _DimmedOverlayState();
 }
 
 class _DimmedOverlayState extends State<_DimmedOverlay> {
-  final GlobalKey _overlayKey = GlobalKey();
-
   @override
   void initState() {
     super.initState();
@@ -392,19 +653,17 @@ class _DimmedOverlayState extends State<_DimmedOverlay> {
   @override
   Widget build(BuildContext context) {
     return IgnorePointer(
-      key: _overlayKey,
       ignoring: true,
       child: LayoutBuilder(
         builder: (context, constraints) {
           return CustomPaint(
+            key: widget.paintSurfaceKey, // Key on actual paint surface for correct coordinate space
             size: Size(constraints.maxWidth, constraints.maxHeight),
             painter: _OverlayPainter(
               highlightedKey: widget.highlightedKey,
               secondHighlightedKey: widget.secondHighlightedKey,
               targetRect: widget.targetRect,
               dimColor: Colors.black.withValues(alpha: 0.45),
-              overlayKey: _overlayKey,
-              overlayContext: context,
             ),
           );
         },
@@ -419,58 +678,36 @@ class _OverlayPainter extends CustomPainter {
     this.secondHighlightedKey,
     this.targetRect,
     required this.dimColor,
-    this.overlayKey,
-    this.overlayContext,
   });
 
   final GlobalKey? highlightedKey;
   final GlobalKey? secondHighlightedKey;
-  final Rect? targetRect; // For advanced mode (in global coordinates)
+  final Rect? targetRect; // For advanced mode (already in local coordinates)
   final Color dimColor;
-  final GlobalKey? overlayKey;
-  final BuildContext? overlayContext; // For coordinate conversion
 
   @override
   void paint(Canvas canvas, Size size) {
     final List<Rect> highlightedRects = [];
     
-    // Use targetRect if provided (advanced mode), otherwise compute from keys
+    // Use targetRect if provided (advanced mode, already local), otherwise compute from keys
     if (targetRect != null) {
-      // Convert targetRect from global to overlay's local coordinate space
-      // Convert both topLeft and bottomRight to ensure correct rect bounds
-      Offset topLeftLocal = Offset(targetRect!.left, targetRect!.top);
-      Offset bottomRightLocal = Offset(targetRect!.right, targetRect!.bottom);
+      var localRect = targetRect!;
       
-      if (overlayKey?.currentContext != null) {
-        final overlayRenderBox = overlayKey!.currentContext!.findRenderObject() as RenderBox?;
-        if (overlayRenderBox != null) {
-          topLeftLocal = overlayRenderBox.globalToLocal(Offset(targetRect!.left, targetRect!.top));
-          bottomRightLocal = overlayRenderBox.globalToLocal(Offset(targetRect!.right, targetRect!.bottom));
-        }
-      } else if (overlayContext != null) {
-        // Fallback: use overlayContext to find RenderBox
-        final overlayRenderBox = overlayContext!.findRenderObject() as RenderBox?;
-        if (overlayRenderBox != null) {
-          topLeftLocal = overlayRenderBox.globalToLocal(Offset(targetRect!.left, targetRect!.top));
-          bottomRightLocal = overlayRenderBox.globalToLocal(Offset(targetRect!.right, targetRect!.bottom));
-        }
-      }
+      // UNIFIED: Safe canvas bounds intersection (applies to all steps)
+      // This prevents cutout from being drawn outside the overlay canvas
+      final canvasBounds = Rect.fromLTWH(0, 0, size.width, size.height);
+      localRect = localRect.intersect(canvasBounds);
       
-      // Create rect from converted points to ensure correct bounds
-      highlightedRects.add(Rect.fromPoints(topLeftLocal, bottomRightLocal));
+      highlightedRects.add(localRect);
     } else {
-      // Legacy mode: compute from keys
+      // Legacy mode: compute from keys in the paint surface's own coordinate space.
+      // For legacy/simple mode we don't rely on advanced mobile behavior, so a direct
+      // use of globalPosition is acceptable as long as the paint surface matches the screen.
       if (highlightedKey?.currentContext != null) {
         final renderBox = highlightedKey!.currentContext!.findRenderObject() as RenderBox?;
         if (renderBox != null && renderBox.hasSize) {
           final globalPosition = renderBox.localToGlobal(Offset.zero);
-          Offset localPosition = globalPosition;
-          if (overlayKey?.currentContext != null) {
-            final overlayRenderBox = overlayKey!.currentContext!.findRenderObject() as RenderBox?;
-            if (overlayRenderBox != null) {
-              localPosition = overlayRenderBox.globalToLocal(globalPosition);
-            }
-          }
+          final localPosition = globalPosition;
           highlightedRects.add(Rect.fromLTWH(
             localPosition.dx,
             localPosition.dy,
@@ -484,13 +721,7 @@ class _OverlayPainter extends CustomPainter {
         final renderBox = secondHighlightedKey!.currentContext!.findRenderObject() as RenderBox?;
         if (renderBox != null && renderBox.hasSize) {
           final globalPosition = renderBox.localToGlobal(Offset.zero);
-          Offset localPosition = globalPosition;
-          if (overlayKey?.currentContext != null) {
-            final overlayRenderBox = overlayKey!.currentContext!.findRenderObject() as RenderBox?;
-            if (overlayRenderBox != null) {
-              localPosition = overlayRenderBox.globalToLocal(globalPosition);
-            }
-          }
+          final localPosition = globalPosition;
           highlightedRects.add(Rect.fromLTWH(
             localPosition.dx,
             localPosition.dy,

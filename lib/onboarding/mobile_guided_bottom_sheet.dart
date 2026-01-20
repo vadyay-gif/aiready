@@ -14,7 +14,12 @@
 ///   `SafeArea(bottom: true)` and minimum padding are enforced.
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'guided_onboarding_controller.dart';
+
+/// Debug toggle for onboarding logs and diagnostics.
+/// Set to true for verification builds; false for release.
+const bool kOnboardingDebug = true;
 class MobileGuidedBottomSheet extends StatelessWidget {
   const MobileGuidedBottomSheet({
     super.key,
@@ -70,6 +75,16 @@ class MobileGuidedBottomSheet extends StatelessWidget {
     final paddingBottom = safeAreaInsets.bottom > 12 ? safeAreaInsets.bottom : 12.0;
     // Account for keyboard/viewInsets to keep bottom sheet visible and tappable
     final keyboardHeight = viewInsets.bottom;
+
+    if (kOnboardingDebug && kDebugMode) {
+      debugPrint(
+        '[BOTTOM_SHEET] build step=$stepNumber '
+        'showContinue=$showContinueButton '
+        'onContinueNull=${onContinue == null} '
+        'onPrevNull=${onPreviousStep == null} '
+        'onSkipNull=${onSkip == null}',
+      );
+    }
     
     return Positioned(
       left: 0,
@@ -120,7 +135,12 @@ class MobileGuidedBottomSheet extends StatelessWidget {
                           if (onPreviousStep != null)
                             Expanded(
                               child: OutlinedButton(
-                                onPressed: onPreviousStep,
+                                onPressed: () {
+                                  if (kOnboardingDebug && kDebugMode) {
+                                    debugPrint('[BOTTOM_SHEET] PREVIOUS pressed (step=$stepNumber)');
+                                  }
+                                  onPreviousStep?.call();
+                                },
                                 style: OutlinedButton.styleFrom(
                                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                                   minimumSize: const Size(0, 40),
@@ -146,7 +166,12 @@ class MobileGuidedBottomSheet extends StatelessWidget {
                           if (onSkip != null)
                             Expanded(
                               child: OutlinedButton(
-                                onPressed: onSkip,
+                                onPressed: () {
+                                  if (kOnboardingDebug && kDebugMode) {
+                                    debugPrint('[BOTTOM_SHEET] SKIP pressed (step=$stepNumber)');
+                                  }
+                                  onSkip?.call();
+                                },
                                 style: OutlinedButton.styleFrom(
                                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                                   minimumSize: const Size(0, 40),
@@ -221,7 +246,12 @@ class MobileGuidedBottomSheet extends StatelessWidget {
                             width: double.infinity,
                             height: 50,
                             child: ElevatedButton(
-                              onPressed: onContinue,
+                              onPressed: () {
+                                if (kOnboardingDebug && kDebugMode) {
+                                  debugPrint('[BOTTOM_SHEET] NEXT pressed (step=$stepNumber)');
+                                }
+                                onContinue?.call();
+                              },
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: const Color(0xFF007AFF),
                                 foregroundColor: Colors.white,

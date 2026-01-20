@@ -1,11 +1,11 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../data/app_catalog.dart';
-import '../services/guided_onboarding.dart' as OldService;
 import '../onboarding/guided_onboarding_controller.dart';
 import '../widgets/scenario_option_tile.dart';
 import '../widgets/guided_overlay.dart';
 import 'scenario_screen.dart';
+import '../onboarding/guided_onboarding_navigation.dart';
 
 class ScenarioChoiceScreen extends StatefulWidget {
   final int trackIndex;
@@ -113,11 +113,14 @@ class _ScenarioChoiceScreenState extends State<ScenarioChoiceScreen> {
                                 },
                               );
 
-                              // Wrap with key if this is the target to ensure proper positioning
+                              // Key must be on the tappable ScenarioOptionTile surface (step 6 target)
                               if (isGuidedTarget) {
-                                return SizedBox(
+                                return ScenarioOptionTile(
                                   key: _scenario1Key,
-                                  child: scenarioTile,
+                                  title: scenario.title,
+                                  subtitle: scenario.situation.split('.').first,
+                                  icon: Icons.assignment_outlined,
+                                  onTap: scenarioTile.onTap,
                                 );
                               }
                               return scenarioTile;
@@ -136,7 +139,7 @@ class _ScenarioChoiceScreenState extends State<ScenarioChoiceScreen> {
               scrollController: _scrollController,
               currentStep: GuidedOnboardingController.getCurrentStepNumber(),
               onPreviousStep: () async {
-                await GuidedOnboardingController.goBack();
+                await handleGuidedPrevious(context);
               },
               onSkip: () async {
                 await GuidedOnboardingController.skip();

@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'guided_onboarding_controller.dart';
@@ -20,39 +22,50 @@ class OnboardingState {
   static const String _keyCompleted = 'onboarding_completed';
   static const String _keyActive = 'onboarding_active';
   static const String _keyStep = 'onboarding_step';
-  
+
+  // Install / state-version keys (used to defeat backup-restore weirdness)
+  static const String _keyInstallId = 'install_id';
+  static const String _keyStateVersion = 'onboarding_state_version';
+
   // Current onboarding version - bump this to force re-onboarding
   static const String _currentVersion = 'v4';
+
+  // Current onboarding state schema version - bump when we change state semantics.
+  static const int _currentStateVersion = 1;
 
   /// Load onboarding status from persistent storage.
   /// Call this early in app lifecycle, before routing decisions.
   static Future<OnboardingStatus> loadOnboardingStatus() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      
+
       // First, check for and clear any old onboarding keys that might interfere
       // This ensures a truly fresh install always shows onboarding
       final oldSeenKey = prefs.getBool('onboarding_seen_v4');
       final oldSeenKeyV3 = prefs.getBool('onboarding_seen_v3');
       final oldSeenKeyV2 = prefs.getBool('onboarding_seen_v2');
       final oldSeenKeyV1 = prefs.getBool('onboarding_seen');
-      
+
+      // Install / state-version diagnostics
+      final storedInstallId = prefs.getString(_keyInstallId);
+      final storedStateVersion = prefs.getInt(_keyStateVersion);
+
       // Check version - if mismatch or missing, treat as fresh install
       final seenVersion = prefs.getString(_keySeenVersion);
       final completedValue = prefs.getBool(_keyCompleted);
       final activeValue = prefs.getBool(_keyActive);
       final stepValue = prefs.getInt(_keyStep);
-      
+
       // Check if this is a truly fresh install (no keys exist at all)
-      final hasAnyKey = seenVersion != null || 
-                        completedValue != null || 
-                        activeValue != null || 
-                        stepValue != null ||
-                        oldSeenKey != null ||
-                        oldSeenKeyV3 != null ||
-                        oldSeenKeyV2 != null ||
-                        oldSeenKeyV1 != null;
-      
+      final hasAnyKey = seenVersion != null ||
+          completedValue != null ||
+          activeValue != null ||
+          stepValue != null ||
+          oldSeenKey != null ||
+          oldSeenKeyV3 != null ||
+          oldSeenKeyV2 != null ||
+          oldSeenKeyV1 != null;
+
       // Debug logging
       if (kDebugMode) {
         debugPrint('[ONBOARDING] Loading state:');
@@ -62,23 +75,41 @@ class OnboardingState {
         debugPrint('  - completed: $completedValue');
         debugPrint('  - active: $activeValue');
         debugPrint('  - step: $stepValue');
+        debugPrint('  - installId: $storedInstallId');
+        debugPrint('  - stateVersion: $storedStateVersion (current: $_currentStateVersion)');
       }
 
-      // CRITICAL: If version doesn't match OR no keys exist, treat as fresh install
-      // This ensures that:
-      // 1. Truly fresh installs (no keys) show onboarding
-      // 2. Old installs with outdated keys show onboarding
-      // 3. Any migration from old system shows onboarding
-      // Check version FIRST - if it doesn't match or is null, it's a fresh install
+      // CRITICAL: If version doesn't match OR no keys exist, treat as fresh install.
+      // Additionally, if installId or stateVersion are missing/mismatched, we
+      // hard-reset onboarding regardless of restored prefs (e.g. from backup).
       final versionMatches = seenVersion == _currentVersion;
-      final hasOldKeys = oldSeenKey == true || oldSeenKeyV3 == true || oldSeenKeyV2 == true || oldSeenKeyV1 == true;
-      
-      // If version doesn't match OR no keys exist OR old keys exist, treat as fresh install
-      if (!versionMatches || !hasAnyKey || hasOldKeys) {
+      final hasOldKeys =
+          oldSeenKey == true || oldSeenKeyV3 == true || oldSeenKeyV2 == true || oldSeenKeyV1 == true;
+      final hasValidInstallId = storedInstallId != null && storedInstallId.isNotEmpty;
+      final stateVersionMatches = storedStateVersion == _currentStateVersion;
+
+      final shouldForceFresh = !versionMatches ||
+          !hasAnyKey ||
+          hasOldKeys ||
+          !hasValidInstallId ||
+          !stateVersionMatches;
+
+      if (kDebugMode) {
+        debugPrint('[ONBOARDING] shouldForceFresh=$shouldForceFresh '
+            '(versionMatches=$versionMatches, hasAnyKey=$hasAnyKey, '
+            'hasOldKeys=$hasOldKeys, hasValidInstallId=$hasValidInstallId, '
+            'stateVersionMatches=$stateVersionMatches)');
+      }
+
+      if (shouldForceFresh) {
         if (kDebugMode) {
-          debugPrint('[ONBOARDING] Fresh install detected - versionMatches=$versionMatches, hasAnyKey=$hasAnyKey, hasOldKeys=$hasOldKeys');
-          debugPrint('[ONBOARDING] Resetting all onboarding state');
+          debugPrint('[ONBOARDING] Fresh install/state reset detected - '
+              'versionMatches=$versionMatches, hasAnyKey=$hasAnyKey, '
+              'hasOldKeys=$hasOldKeys, hasValidInstallId=$hasValidInstallId, '
+              'stateVersionMatches=$stateVersionMatches');
+          debugPrint('[ONBOARDING] Resetting all onboarding state and seeding installId/stateVersion');
         }
+
         // Clear ALL onboarding state for fresh install or version change
         await prefs.remove(_keySeenVersion);
         await prefs.remove(_keyCompleted);
@@ -91,13 +122,22 @@ class OnboardingState {
         await prefs.remove('onboarding_seen');
         await prefs.remove('guided_onboarding_active'); // Old key name
         await prefs.remove('guided_onboarding_step'); // Old key name
-        
-        // Force a fresh status - always show onboarding on fresh install
+
+        // Explicitly seed baseline flags for a truly fresh intro.
+        await prefs.setBool(_keyCompleted, false);
+        await prefs.setBool(_keyActive, false);
+        await prefs.setInt(_keyStep, GuidedOnboardingStep.none.index);
+
+        // Seed installId and state-version so future launches are stable.
+        final newInstallId = _generateInstallId();
+        await prefs.setString(_keyInstallId, newInstallId);
+        await prefs.setInt(_keyStateVersion, _currentStateVersion);
+
         if (kDebugMode) {
           debugPrint('[ONBOARDING] All onboarding keys cleared - returning fresh status (shouldShowIntro=true)');
         }
-        
-        return OnboardingStatus(
+
+        return const OnboardingStatus(
           status: OnboardingStatusType.fresh,
           shouldShowIntro: true,
           shouldShowGuided: false,
@@ -112,7 +152,7 @@ class OnboardingState {
         if (kDebugMode) {
           debugPrint('[ONBOARDING] Onboarding completed - skipping');
         }
-        return OnboardingStatus(
+        return const OnboardingStatus(
           status: OnboardingStatusType.completed,
           shouldShowIntro: false,
           shouldShowGuided: false,
@@ -142,7 +182,7 @@ class OnboardingState {
       if (kDebugMode) {
         debugPrint('[ONBOARDING] Fresh install - showing intro slides');
       }
-      return OnboardingStatus(
+      return const OnboardingStatus(
         status: OnboardingStatusType.fresh,
         shouldShowIntro: true,
         shouldShowGuided: false,
@@ -154,7 +194,7 @@ class OnboardingState {
         debugPrint('[ONBOARDING] Error loading state: $e - defaulting to fresh');
       }
       // On error, default to fresh install
-      return OnboardingStatus(
+      return const OnboardingStatus(
         status: OnboardingStatusType.fresh,
         shouldShowIntro: true,
         shouldShowGuided: false,
@@ -219,6 +259,13 @@ class OnboardingState {
 
   /// Get the current version string (for external use).
   static String get currentVersion => _currentVersion;
+
+  /// Generate a simple install identifier (no external deps).
+  static String _generateInstallId() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final random = Random().nextInt(1 << 32);
+    return 'install_${now}_$random';
+  }
 }
 
 /// Result of loading onboarding status.

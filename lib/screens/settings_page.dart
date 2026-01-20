@@ -168,8 +168,10 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final isGuided = OldService.GuidedOnboarding.isActive &&
-        OldService.GuidedOnboarding.step == OldService.GuidedOnboardingStep.infoSettings;
+    // Use new controller as source of truth
+    final isGuided = GuidedOnboardingController.isActive &&
+        GuidedOnboardingController.currentStep == GuidedOnboardingStep.infoSettings;
+    final stepNumber = GuidedOnboardingController.getCurrentStepNumber();
 
     return Scaffold(
       appBar: AppBar(
