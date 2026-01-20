@@ -6,6 +6,7 @@ import '../models/track.dart';
 import '../data/app_catalog.dart';
 import '../services/guided_onboarding.dart' as OldService;
 import '../onboarding/guided_onboarding_controller.dart';
+import '../onboarding/mobile_guided_bottom_sheet.dart';
 import '../widgets/guided_overlay.dart';
 import 'task_screen.dart';
 
@@ -42,6 +43,7 @@ class _ScenarioScreenState extends State<ScenarioScreen> {
   final GlobalKey _variantsKey = GlobalKey();
   final GlobalKey _proTipKey = GlobalKey();
   final ScrollController _scrollController = ScrollController();
+  int? _lastSectionIndex; // Track last section index to only scroll on change
   
   // Map step number (7-11) to section index (0-4)
   int _getSectionIndexFromStep(int stepNumber) {
@@ -106,6 +108,21 @@ class _ScenarioScreenState extends State<ScenarioScreen> {
     }
     
     return sections;
+  }
+
+  void _scrollToSection(GlobalKey key) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final ctx = key.currentContext;
+      if (ctx == null) return;
+      Scrollable.ensureVisible(
+        ctx,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+        alignment: 0.25,
+        alignmentPolicy: ScrollPositionAlignmentPolicy.explicit,
+      );
+    });
   }
   
 
@@ -239,7 +256,15 @@ class _ScenarioScreenState extends State<ScenarioScreen> {
             bottom: false,
             child: ListView(
               controller: _scrollController,
-              padding: EdgeInsets.fromLTRB(16, 16, 16, 24 + bottomInset),
+              padding: EdgeInsets.fromLTRB(
+                16,
+                16,
+                16,
+                // Add extra bottom padding during guided steps 7-11 to ensure Pro Tip is visible above bottom sheet
+                isGuided && currentSectionIndex != null && currentSectionIndex >= 0 && currentSectionIndex <= 4
+                    ? 24 + bottomInset + MobileGuidedBottomSheet.getEstimatedHeight(context) + 16
+                    : 24 + bottomInset,
+              ),
           children: [
             // 1. Situation
             SizedBox(
@@ -336,6 +361,13 @@ class _ScenarioScreenState extends State<ScenarioScreen> {
                         sectionIndex == sections.length - 1;
                     final stepNumber =
                         GuidedOnboardingController.getCurrentStepNumber();
+
+                    // Auto-scroll the current section into view so it stays above the bottom sheet.
+                    // Only scroll when sectionIndex changes (prevents repeated scrolling).
+                    if (_lastSectionIndex != sectionIndex) {
+                      _lastSectionIndex = sectionIndex;
+                      _scrollToSection(currentSection.key);
+                    }
 
                     // DEBUG: Log section mapping and key/rect (temporary, removable)
                     if (kDebugMode) {

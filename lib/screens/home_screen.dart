@@ -213,14 +213,22 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                   'HOME card -> ${track.title} lessons=${track.lessons.length} disabled=${track.isDisabled}');
                             }
 
+                            final currentStepEnum =
+                                GuidedOnboardingController.currentStep;
                             final bool isGuidedTarget = isGuided &&
-                                GuidedOnboardingController.currentStep ==
+                                currentStepEnum ==
                                     GuidedOnboardingStep.trackSelection &&
                                 i == 0;
+                            // Block ALL track taps while on Step 4 (trackSelection) and
+                            // Step 16 (infoSettings on Home) in guided mode.
+                            // During Step 4, only Track 1 (i == 0) is tappable.
+                            final bool isStep4 =
+                                isGuided && currentStepEnum == GuidedOnboardingStep.trackSelection;
+                            final bool isStep16 =
+                                isGuided && currentStepEnum == GuidedOnboardingStep.infoSettings;
                             final bool allowTap = !isGuided ||
-                                GuidedOnboardingController.currentStep !=
-                                    GuidedOnboardingStep.trackSelection ||
-                                i == 0;
+                                (!isStep4 && !isStep16) ||
+                                (isStep4 && i == 0);
 
                             final trackTile = TrackTile(
                               // Use a dedicated onboarding key applied directly to the Material root.
@@ -236,36 +244,27 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                               ),
                               highlight: isGuidedTarget,
                               onTap: () async {
-                                // HARD LOCK STEP 4: when guided is active and step 4
-                                // highlight is not yet ready, ignore taps on Track 1.
-                                if (isGuidedTarget &&
-                                    GuidedOnboardingController.currentStep ==
-                                        GuidedOnboardingStep.trackSelection &&
-                                    !_step4HighlightReady) {
+                                if (!allowTap) {
                                   if (kDebugMode) {
                                     debugPrint(
-                                        '[STEP4_LOCK] tap blocked (ready=false)');
+                                        '[HOME_ONBOARDING] tap blocked (step=$currentStepEnum, index=$i)');
                                   }
                                   return;
                                 }
-                                if (!allowTap) return;
                                 if (kDebugMode) {
                                   debugPrint('Open track: ${track.title}');
                                 }
                                 if (canOpen) {
-                                  // CRITICAL: Advance onboarding BEFORE navigation so TrackScreen sees step 5
-                                  final shouldAdvance = isGuided &&
-                                      GuidedOnboardingController.currentStep ==
+                                  // Step 4: advance to lessonSelection BEFORE navigating.
+                                  final isStep4Tap = isGuided &&
+                                      currentStepEnum ==
                                           GuidedOnboardingStep.trackSelection &&
                                       i == 0;
-                                  
-                                  if (shouldAdvance) {
-                                    // Advance to step 5 immediately, then persist state
+                                  if (isStep4Tap) {
                                     await GuidedOnboardingController.next();
-                                    // Wait a microtask to ensure state is persisted before navigation
                                     await Future.microtask(() {});
                                   }
-                                  
+
                                   // Navigate to TrackScreen (step 5 overlay will appear immediately)
                                   Navigator.push(
                                     context,
@@ -302,8 +301,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                               ),
                               highlight: isGuidedTarget,
                               onTap: () async {
-                                // CRITICAL: Advance onboarding to step 16 BEFORE navigation (same pattern as Steps 4, 6, 11)
-                                if (isGuidedTarget) {
+                                // Step 16: Info & Settings tile tap-required in guided mode.
+                                if (isGuided &&
+                                    GuidedOnboardingController.currentStep ==
+                                        GuidedOnboardingStep.infoSettings) {
+                                  // Advance to settings-page step (17) BEFORE navigation.
                                   await GuidedOnboardingController.next();
                                   await Future.microtask(() {});
                                 }
@@ -387,6 +389,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                       Navigator.of(context).popUntil((route) => route.isFirst);
                     }
                   },
+                  // Step 4 is TAP-REQUIRED: no Next button (UIActionHint supplies tap instruction).
+                  showContinueButton: false,
                 )
               else if (shouldShowOverlay && currentStep == GuidedOnboardingStep.infoSettings)
                 GuidedOverlay(

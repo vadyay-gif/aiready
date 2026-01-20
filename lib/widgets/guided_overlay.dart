@@ -60,6 +60,7 @@ class GuidedOverlay extends StatefulWidget {
 
 class _GuidedOverlayState extends State<GuidedOverlay> {
   Rect? _targetRect;
+  Rect? _secondTargetRect;
   bool _isSyncing = false;
   int _syncToken = 0;
   double? _bottomSheetHeight;
@@ -68,6 +69,8 @@ class _GuidedOverlayState extends State<GuidedOverlay> {
   final GlobalKey _paintSurfaceKey = GlobalKey();
   bool _measurementScheduled = false; // Guard against measurement loops
   bool _lastHighlightReady = false;
+  int _retryAttempts = 0;
+  static const int _maxRetryAttempts = 10; // Guard against infinite retry loops
 
   // Step 4 readiness gating – limit how many frames we wait for HomeScreen/target/paint
   // to be fully laid out before attempting measurement.
@@ -82,6 +85,7 @@ class _GuidedOverlayState extends State<GuidedOverlay> {
   void initState() {
     super.initState();
     if (_isAdvancedMode) {
+      widget.scrollController?.addListener(_onScroll);
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _scheduleMeasurement();
         _syncToStep();
@@ -89,9 +93,21 @@ class _GuidedOverlayState extends State<GuidedOverlay> {
     }
   }
 
+  void _onScroll() {
+    // Recompute rects when scroll changes (for steps 8-10 alignment)
+    if (_isAdvancedMode && mounted) {
+      _recomputeRects();
+    }
+  }
+
   @override
   void didUpdateWidget(GuidedOverlay oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // Update scroll listener if controller changed
+    if (oldWidget.scrollController != widget.scrollController) {
+      oldWidget.scrollController?.removeListener(_onScroll);
+      widget.scrollController?.addListener(_onScroll);
+    }
     // Freeze fix: only skip sync if step didn't change
     if (_isAdvancedMode && oldWidget.currentStep != widget.currentStep) {
       // If we are leaving step 4, clear highlight readiness so hosts can lock taps again.
@@ -99,10 +115,16 @@ class _GuidedOverlayState extends State<GuidedOverlay> {
         _updateHighlightReady(false);
       }
       // Step changed - re-measure bottom sheet (button visibility may change height) and resync
+      _retryAttempts = 0; // Reset retry counter on step change
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _scheduleMeasurement();
         _syncToStep();
       });
+    } else if (_isAdvancedMode && 
+               (oldWidget.highlightedKey != widget.highlightedKey ||
+                oldWidget.secondHighlightedKey != widget.secondHighlightedKey)) {
+      // Keys changed - recompute rects
+      _recomputeRects();
     }
   }
 
@@ -258,6 +280,37 @@ class _GuidedOverlayState extends State<GuidedOverlay> {
     }
     
     _targetRect = measuredRect;
+    
+    // Also measure secondHighlightedKey if present
+    if (widget.secondHighlightedKey != null) {
+      Rect? measuredSecondRect;
+      Rect? previousSecondRect;
+      for (int attempt = 0; attempt < 5; attempt++) {
+        if (!mounted || currentToken != _syncToken) return;
+        
+        final currentRect = _getRectForKey(widget.secondHighlightedKey);
+        if (currentRect != null) {
+          if (previousSecondRect != null) {
+            final deltaX = (currentRect.left - previousSecondRect.left).abs();
+            final deltaY = (currentRect.top - previousSecondRect.top).abs();
+            final deltaW = (currentRect.width - previousSecondRect.width).abs();
+            final deltaH = (currentRect.height - previousSecondRect.height).abs();
+            
+            if (deltaX <= 2 && deltaY <= 2 && deltaW <= 2 && deltaH <= 2) {
+              measuredSecondRect = currentRect;
+              break;
+            }
+          }
+          previousSecondRect = currentRect;
+        }
+        
+        await WidgetsBinding.instance.endOfFrame;
+      }
+      _secondTargetRect = measuredSecondRect;
+    } else {
+      _secondTargetRect = null;
+    }
+    
     if (stepNumber == 4) {
       if (measuredRect != null) {
         // Reset attempts once we have a usable rect
@@ -269,6 +322,19 @@ class _GuidedOverlayState extends State<GuidedOverlay> {
     } else {
       // Any non-step-4 step clears the step 4 readiness flag
       _updateHighlightReady(false);
+    }
+    
+    // If we couldn't compute any rects, schedule a guarded retry
+    if (measuredRect == null && _secondTargetRect == null && _retryAttempts < _maxRetryAttempts) {
+      _retryAttempts++;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && currentToken == _syncToken) {
+          _syncToStep();
+        }
+      });
+      return; // Don't set _isSyncing = false yet, wait for retry
+    } else if (measuredRect != null || _secondTargetRect != null) {
+      _retryAttempts = 0; // Reset on success
     }
     
     if (mounted && currentToken == _syncToken) {
@@ -291,9 +357,33 @@ class _GuidedOverlayState extends State<GuidedOverlay> {
 
   @override
   void dispose() {
+    widget.scrollController?.removeListener(_onScroll);
     // Ensure readiness flag is cleared when overlay is disposed.
     _updateHighlightReady(false);
     super.dispose();
+  }
+
+  /// Recompute target rects from keys (called on scroll or key changes).
+  void _recomputeRects() {
+    if (!mounted) return;
+    final primaryRect = _getRectForKey(widget.highlightedKey);
+    final secondRect = widget.secondHighlightedKey != null
+        ? _getRectForKey(widget.secondHighlightedKey)
+        : null;
+    
+    if (primaryRect != null || secondRect != null) {
+      setState(() {
+        _targetRect = primaryRect;
+        _secondTargetRect = secondRect;
+        _retryAttempts = 0; // Reset on success
+      });
+    } else if (_retryAttempts < _maxRetryAttempts) {
+      // Retry next frame if rects not available yet
+      _retryAttempts++;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _recomputeRects();
+      });
+    }
   }
 
   /// Step 4 readiness check: require non-null contexts and non-zero sizes for
@@ -435,24 +525,31 @@ class _GuidedOverlayState extends State<GuidedOverlay> {
 
   /// Measure the rect for a target key in the paint surface's local coordinate space.
   /// Returns null if either the target or the paint surface is not ready.
+  /// Uses explicit coordinate conversion: localTopLeft = targetGlobalTopLeft - overlayGlobalTopLeft
   Rect? _getRectForKey(GlobalKey? key) {
     if (key?.currentContext == null) return null;
     if (_paintSurfaceKey.currentContext == null) return null;
     
     final targetBox = key!.currentContext!.findRenderObject() as RenderBox?;
-    final paintBox = _paintSurfaceKey.currentContext!.findRenderObject() as RenderBox?;
-    if (targetBox == null || !targetBox.hasSize || paintBox == null || !paintBox.hasSize) {
+    final overlayBox = _paintSurfaceKey.currentContext!.findRenderObject() as RenderBox?;
+    if (targetBox == null || !targetBox.hasSize || overlayBox == null || !overlayBox.hasSize) {
       return null;
     }
     
-    // Global bounds of the target
-    final globalTopLeft = targetBox.localToGlobal(Offset.zero);
-    final globalBottomRight = targetBox.localToGlobal(targetBox.size.bottomRight(Offset.zero));
+    // Get global positions
+    final targetGlobalTopLeft = targetBox.localToGlobal(Offset.zero);
+    final overlayGlobalTopLeft = overlayBox.localToGlobal(Offset.zero);
     
-    // Convert once into the paint surface's local coordinate space
-    final localTopLeft = paintBox.globalToLocal(globalTopLeft);
-    final localBottomRight = paintBox.globalToLocal(globalBottomRight);
-    final localRect = Rect.fromPoints(localTopLeft, localBottomRight);
+    // Convert to overlay's local coordinate space using explicit subtraction
+    final localTopLeft = targetGlobalTopLeft - overlayGlobalTopLeft;
+    
+    // Create rect in overlay's local coordinate space
+    final localRect = Rect.fromLTWH(
+      localTopLeft.dx,
+      localTopLeft.dy,
+      targetBox.size.width,
+      targetBox.size.height,
+    );
 
     // STEP 4 DIAGNOSTICS: log both global and local rect plus canvas size + DPR,
     // but only when guided onboarding is active and we're on step 4.
@@ -460,16 +557,15 @@ class _GuidedOverlayState extends State<GuidedOverlay> {
       final isStep4 = GuidedOnboardingController.isActive &&
           GuidedOnboardingController.currentStep == GuidedOnboardingStep.trackSelection;
       if (isStep4) {
-        final paintSize = paintBox.size;
+        final overlaySize = overlayBox.size;
         final dpr = WidgetsBinding.instance.platformDispatcher.views.isNotEmpty
             ? WidgetsBinding.instance.platformDispatcher.views.first.devicePixelRatio
             : 1.0;
         debugPrint(
-          '[STEP 4 DEBUG] globalRect: '
-          '(${globalTopLeft.dx}, ${globalTopLeft.dy}) -> '
-          '(${globalBottomRight.dx}, ${globalBottomRight.dy}), '
+          '[STEP 4 DEBUG] targetGlobalTopLeft: ($targetGlobalTopLeft), '
+          'overlayGlobalTopLeft: ($overlayGlobalTopLeft), '
           'localRect: $localRect, '
-          'paintSurfaceSize: $paintSize, '
+          'overlaySize: $overlaySize, '
           'devicePixelRatio: $dpr',
         );
       }
@@ -498,15 +594,18 @@ class _GuidedOverlayState extends State<GuidedOverlay> {
           // IMPORTANT: Barrier does NOT cover bottom sheet area
           if (widget.showDimmedOverlay) ...[
             // Visual scrim (full screen for visual effect, NON-INTERACTIVE)
-            Positioned.fill(
-              child: IgnorePointer(
-                ignoring: true, // Scrim is purely visual - does not intercept taps
-                child: _DimmedOverlay(
-                  targetRect: _targetRect,
-                  paintSurfaceKey: _paintSurfaceKey,
+            // Only render if we have at least one valid rect (prevents full-screen blocking)
+            if (_targetRect != null || _secondTargetRect != null)
+              Positioned.fill(
+                child: IgnorePointer(
+                  ignoring: true, // Scrim is purely visual - does not intercept taps
+                  child: _DimmedOverlay(
+                    targetRect: _targetRect,
+                    secondTargetRect: _secondTargetRect,
+                    paintSurfaceKey: _paintSurfaceKey,
+                  ),
                 ),
               ),
-            ),
 
             // DEBUG ONLY: Draw a visible border for Step 4 using the same local rect as the cutout
             if (kOnboardingDebug &&
@@ -611,6 +710,7 @@ class _DimmedOverlay extends StatefulWidget {
     this.secondHighlightedKey,
     this.scrollController,
     this.targetRect,
+    this.secondTargetRect,
     this.paintSurfaceKey,
   });
 
@@ -618,6 +718,7 @@ class _DimmedOverlay extends StatefulWidget {
   final GlobalKey? secondHighlightedKey;
   final ScrollController? scrollController;
   final Rect? targetRect; // For advanced mode
+  final Rect? secondTargetRect; // For advanced mode (second highlight)
   final GlobalKey? paintSurfaceKey; // Paint surface key from GuidedOverlay
 
   @override
@@ -663,6 +764,7 @@ class _DimmedOverlayState extends State<_DimmedOverlay> {
               highlightedKey: widget.highlightedKey,
               secondHighlightedKey: widget.secondHighlightedKey,
               targetRect: widget.targetRect,
+              secondTargetRect: widget.secondTargetRect,
               dimColor: Colors.black.withValues(alpha: 0.45),
             ),
           );
@@ -677,29 +779,47 @@ class _OverlayPainter extends CustomPainter {
     this.highlightedKey,
     this.secondHighlightedKey,
     this.targetRect,
+    this.secondTargetRect,
     required this.dimColor,
   });
 
   final GlobalKey? highlightedKey;
   final GlobalKey? secondHighlightedKey;
   final Rect? targetRect; // For advanced mode (already in local coordinates)
+  final Rect? secondTargetRect; // For advanced mode (second highlight, already in local coordinates)
   final Color dimColor;
 
   @override
   void paint(Canvas canvas, Size size) {
     final List<Rect> highlightedRects = [];
-    
+
+    // If we have no target and no keys at all, do not draw anything.
+    // This avoids a full-screen blocking scrim when we don't yet know the highlight area.
+    if (targetRect == null && highlightedKey == null && secondHighlightedKey == null) {
+      return;
+    }
+
     // Use targetRect if provided (advanced mode, already local), otherwise compute from keys
     if (targetRect != null) {
       var localRect = targetRect!;
-      
+
       // UNIFIED: Safe canvas bounds intersection (applies to all steps)
       // This prevents cutout from being drawn outside the overlay canvas
       final canvasBounds = Rect.fromLTWH(0, 0, size.width, size.height);
       localRect = localRect.intersect(canvasBounds);
-      
+
       highlightedRects.add(localRect);
-    } else {
+    }
+    
+    // Add second target rect if provided
+    if (secondTargetRect != null) {
+      var localSecondRect = secondTargetRect!;
+      final canvasBounds = Rect.fromLTWH(0, 0, size.width, size.height);
+      localSecondRect = localSecondRect.intersect(canvasBounds);
+      highlightedRects.add(localSecondRect);
+    }
+    
+    if (targetRect == null && secondTargetRect == null) {
       // Legacy mode: compute from keys in the paint surface's own coordinate space.
       // For legacy/simple mode we don't rely on advanced mobile behavior, so a direct
       // use of globalPosition is acceptable as long as the paint surface matches the screen.
@@ -716,7 +836,7 @@ class _OverlayPainter extends CustomPainter {
           ));
         }
       }
-      
+
       if (secondHighlightedKey?.currentContext != null) {
         final renderBox = secondHighlightedKey!.currentContext!.findRenderObject() as RenderBox?;
         if (renderBox != null && renderBox.hasSize) {
@@ -731,10 +851,10 @@ class _OverlayPainter extends CustomPainter {
         }
       }
     }
-    
+
+    // If we expected a highlight (we had a key or targetRect) but couldn't compute a rect yet,
+    // draw nothing this frame and try again on the next paint instead of blocking the whole screen.
     if (highlightedRects.isEmpty) {
-      final dimPaint = Paint()..color = dimColor;
-      canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), dimPaint);
       return;
     }
     

@@ -150,38 +150,47 @@ class _ScenarioCompleteScreenState extends State<ScenarioCompleteScreen> {
               },
             ),
           ),
-          if (isGuided && stepNumber == 14)
-            GuidedOverlay(
-              text:
-                  "Each scenario ends with one key idea.\nThis is what you should remember.",
-              highlightedKey: _takeawayKey,
-              scrollController: _scrollController,
-              currentStep: stepNumber,
-              onPreviousStep: () async {
-                await GuidedOnboardingController.goBack();
-              },
-              onSkip: () async {
-                await GuidedOnboardingController.skip();
-                if (context.mounted) {
-                  Navigator.of(context).popUntil((route) => route.isFirst);
+          if (isGuided && stepNumber == 15)
+            Builder(
+              builder: (context) {
+                // Ensure takeaway card is mounted before showing overlay to avoid full-screen dim.
+                if (_takeawayKey.currentContext == null) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) setState(() {});
+                  });
+                  return const SizedBox.shrink();
                 }
-              },
-              showContinueButton: true,
-              continueButtonText: 'Next',
-              onContinue: () async {
-                // Step 14 -> Step 15 (infoSettings on HomeScreen)
-                await GuidedOnboardingController.next();
-                await Future.microtask(() {});
-                if (kDebugMode) {
-                  final after =
-                      GuidedOnboardingController.getCurrentStepNumber();
-                  debugPrint(
-                      '[SCENARIO_COMPLETE] overlay active step=14 -> nextStep=$after');
-                }
-                if (kDebugMode) {
-                  debugPrint('[GUIDED_NAV] STEP14_NEXT nav=HomeScreen');
-                }
-                Navigator.popUntil(context, (route) => route.isFirst);
+                return GuidedOverlay(
+                  text:
+                      "Each scenario ends with one key idea.\nThis is what you should remember.",
+                  highlightedKey: _takeawayKey,
+                  scrollController: _scrollController,
+                  currentStep: stepNumber,
+                  onPreviousStep: () async {
+                    await GuidedOnboardingController.goBack();
+                  },
+                  onSkip: () async {
+                    await GuidedOnboardingController.skip();
+                    if (context.mounted) {
+                      Navigator.of(context).popUntil((route) => route.isFirst);
+                    }
+                  },
+                  showContinueButton: true,
+                  continueButtonText: 'Next',
+                  onContinue: () async {
+                    // Step 15 -> Step 16 (infoSettings on HomeScreen)
+                    await GuidedOnboardingController.next();
+                    await Future.microtask(() {});
+                    if (kDebugMode) {
+                      final after =
+                          GuidedOnboardingController.getCurrentStepNumber();
+                      debugPrint(
+                          '[SCENARIO_COMPLETE] overlay active step=15 -> nextStep=$after');
+                      debugPrint('[GUIDED_NAV] STEP15_NEXT nav=HomeScreen');
+                    }
+                    Navigator.popUntil(context, (route) => route.isFirst);
+                  },
+                );
               },
             ),
           // Bottom buttons - positioned in Stack so overlay can cover them

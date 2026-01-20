@@ -171,7 +171,7 @@ class _SettingsPageState extends State<SettingsPage> {
     // Use new controller as source of truth
     final isGuided = GuidedOnboardingController.isActive &&
         GuidedOnboardingController.currentStep == GuidedOnboardingStep.infoSettings;
-    final stepNumber = GuidedOnboardingController.getCurrentStepNumber();
+    final stepNumber = GuidedOnboardingController.getCurrentStepNumber(settingsPage: true);
 
     return Scaffold(
       appBar: AppBar(
@@ -311,14 +311,15 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
         ],
       ),
-          if (isGuided)
+          if (isGuided && stepNumber == 17)
             GuidedOverlay(
               text: "You can track your progress here.",
               highlightedKey: _progressKey,
               scrollController: _scrollController,
+              currentStep: stepNumber,
               showCompletionButton: true,
               onComplete: () async {
-                await OldService.GuidedOnboarding.complete();
+                await GuidedOnboardingController.complete();
                 if (mounted) {
                   Navigator.of(context).popUntil((route) => route.isFirst);
                 }

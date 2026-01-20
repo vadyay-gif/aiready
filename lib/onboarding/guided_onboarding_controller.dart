@@ -25,6 +25,9 @@ class GuidedOnboardingController {
   static const String _stepKey = 'onboarding_step';
   static const String _scenarioSectionKey = 'onboarding_scenario_section';
 
+  /// Total number of guided onboarding steps (for display in the bottom sheet).
+  static const int totalSteps = 17;
+
   static bool _active = false;
   static GuidedOnboardingStep _step = GuidedOnboardingStep.none;
   static bool _initialized = false;
@@ -385,9 +388,9 @@ class GuidedOnboardingController {
       case GuidedOnboardingStep.taskGuidance:
         return 13;
       case GuidedOnboardingStep.resultsTakeaway:
-        return 14;
+        return 15;
       case GuidedOnboardingStep.infoSettings:
-        return settingsPage ? 16 : 15; // Step 15 on home screen, step 16 on settings page
+        return settingsPage ? 17 : 16; // Step 16 on home screen, step 17 on settings page
       default:
         return null;
     }
@@ -506,7 +509,7 @@ class GuidedOnboardingController {
         return "Tap the highlighted scenario to continue.";
       case 11:
         return "Tap 'Try the Task' to continue.";
-      case 15:
+      case 16:
         return "Tap the highlighted tile to open Info & Settings.";
       default:
         return null;

@@ -196,10 +196,10 @@ class MobileGuidedBottomSheet extends StatelessWidget {
                       ),
                       const SizedBox(height: 16),
                     ],
-                    // Step progress (X/16) - ONLY displayed here for steps 4-16
-                    if (stepNumber != null && stepNumber! >= 4) ...[
+                    // Step progress (X/totalSteps) - displayed for steps 1-17
+                    if (stepNumber != null && stepNumber! >= 1) ...[
                       Text(
-                        '$stepNumber/16',
+                        '$stepNumber/${GuidedOnboardingController.totalSteps}',
                         textAlign: TextAlign.center,
                         style: const TextStyle(
                           fontSize: 15,
@@ -220,28 +220,48 @@ class MobileGuidedBottomSheet extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 16),
-                    // Primary action button (Next for steps 4-15, Complete for final step)
-                    // CRITICAL: Hide Next button for steps 4, 5, 6, 11, 15 - user taps highlighted widget
+                    // Primary action button (Next for steps 4-17, Complete for final step)
+                    // CRITICAL: Hide Next button for tap-required steps (4, 11, 16) - user taps highlighted widget
                     // Helper text comes from GuidedOnboardingController.getUIActionHint() (single source of truth)
                     Builder(
                       builder: (context) {
                         final uiActionHint = _getUIActionHint();
-                        // CRITICAL: Steps 4,5,6,11,15 show hint ONLY (no Next button)
-                        // All other steps show Next button ONLY (no hint)
+                        // Explicit list of tap-required steps that must NEVER show Next button
+                        final tapRequiredSteps = {4, 11, 16};
+                        final isTapRequired = stepNumber != null && tapRequiredSteps.contains(stepNumber);
+                        
+                        // CRITICAL: Tap-required steps show hint ONLY (no Next button)
+                        // All other steps show Next button ONLY (no hint) if showContinueButton is true
                         // STRICT mutual exclusivity - never show both
-                        if (uiActionHint != null) {
-                          // Hint is present - show it ONLY, hide Next button completely
+                        if (isTapRequired) {
+                          // Tap-required step: show hint if available, otherwise show nothing (no blank text)
+                          if (uiActionHint != null) {
+                            return Text(
+                              uiActionHint,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 14, // Smaller than button text (17px)
+                                color: Colors.grey[600], // Secondary/onSurfaceVariant color
+                                fontStyle: FontStyle.italic, // Subtle styling
+                              ),
+                            );
+                          } else {
+                            // No hint available for tap-required step - return empty widget
+                            return const SizedBox.shrink();
+                          }
+                        } else if (uiActionHint != null) {
+                          // Non-tap-required step with hint (shouldn't happen, but handle gracefully)
                           return Text(
                             uiActionHint,
                             textAlign: TextAlign.center,
                             style: TextStyle(
-                              fontSize: 14, // Smaller than button text (17px)
-                              color: Colors.grey[600], // Secondary/onSurfaceVariant color
-                              fontStyle: FontStyle.italic, // Subtle styling
+                              fontSize: 14,
+                              color: Colors.grey[600],
+                              fontStyle: FontStyle.italic,
                             ),
                           );
-                        } else if (showContinueButton || (stepNumber != null && stepNumber! >= 4 && stepNumber! <= 15)) {
-                          // No hint - show Next button ONLY (hint is null for this step)
+                        } else if (showContinueButton || (stepNumber != null && stepNumber! >= 4 && stepNumber! <= 17 && !isTapRequired)) {
+                          // No hint and not tap-required - show Next button ONLY (hint is null for this step)
                           return SizedBox(
                             width: double.infinity,
                             height: 50,

@@ -287,7 +287,7 @@ class _OnboardingPageWidgetState extends State<_OnboardingPageWidget>
             SizedBox(height: AdaptiveInsets.sectionGap(context) * 2),
             // Step number (for steps 1-3)
             Text(
-              '${widget.stepNumber}/16',
+              '${widget.stepNumber}/${GuidedOnboardingController.totalSteps}',
               textAlign: TextAlign.center,
               style: const TextStyle(
                 fontSize: 15,

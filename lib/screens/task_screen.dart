@@ -103,6 +103,9 @@ class _TaskScreenState extends State<TaskScreen> {
 
     final isTaskIntro = isGuided && stepNumber == 12;
     final isTaskGuidance = isGuided && stepNumber == 13;
+    // Local step number for display: phase 0 = 12, phase 1 = 13
+    final int displayStepNumber =
+        (isTaskIntro && _taskPhase == 1) ? 13 : (stepNumber ?? 12);
 
     return Scaffold(
       appBar: AppBar(title: Text(scenarioDef.title)),
@@ -375,7 +378,7 @@ class _TaskScreenState extends State<TaskScreen> {
               secondHighlightedKey:
                   _taskPhase == 1 ? _checkAnswerKey : null,
               scrollController: _scrollController,
-              currentStep: stepNumber,
+              currentStep: displayStepNumber,
               onPreviousStep: () async {
                 await GuidedOnboardingController.goBack();
               },
