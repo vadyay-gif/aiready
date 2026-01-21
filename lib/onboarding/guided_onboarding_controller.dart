@@ -509,6 +509,8 @@ class GuidedOnboardingController {
         return "Tap the highlighted scenario to continue.";
       case 11:
         return "Tap 'Try the Task' to continue.";
+      case 13:
+        return "Select the prompt pieces and tap 'Check My Answer'.";
       case 16:
         return "Tap the highlighted tile to open Info & Settings.";
       default:

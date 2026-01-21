@@ -594,18 +594,18 @@ class _GuidedOverlayState extends State<GuidedOverlay> {
           // IMPORTANT: Barrier does NOT cover bottom sheet area
           if (widget.showDimmedOverlay) ...[
             // Visual scrim (full screen for visual effect, NON-INTERACTIVE)
-            // Only render if we have at least one valid rect (prevents full-screen blocking)
-            if (_targetRect != null || _secondTargetRect != null)
-              Positioned.fill(
-                child: IgnorePointer(
-                  ignoring: true, // Scrim is purely visual - does not intercept taps
-                  child: _DimmedOverlay(
-                    targetRect: _targetRect,
-                    secondTargetRect: _secondTargetRect,
-                    paintSurfaceKey: _paintSurfaceKey,
-                  ),
+            // CRITICAL: Always mount the paint surface so _paintSurfaceKey exists for measurement.
+            // The painter will only draw dim if rects are available (prevents full-screen blocking).
+            Positioned.fill(
+              child: IgnorePointer(
+                ignoring: true, // Scrim is purely visual - does not intercept taps
+                child: _DimmedOverlay(
+                  targetRect: _targetRect,
+                  secondTargetRect: _secondTargetRect,
+                  paintSurfaceKey: _paintSurfaceKey,
                 ),
               ),
+            ),
 
             // DEBUG ONLY: Draw a visible border for Step 4 using the same local rect as the cutout
             if (kOnboardingDebug &&

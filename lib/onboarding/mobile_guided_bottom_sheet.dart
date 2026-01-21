@@ -227,7 +227,7 @@ class MobileGuidedBottomSheet extends StatelessWidget {
                       builder: (context) {
                         final uiActionHint = _getUIActionHint();
                         // Explicit list of tap-required steps that must NEVER show Next button
-                        final tapRequiredSteps = {4, 11, 16};
+                        final tapRequiredSteps = {4, 11, 13, 16};
                         final isTapRequired = stepNumber != null && tapRequiredSteps.contains(stepNumber);
                         
                         // CRITICAL: Tap-required steps show hint ONLY (no Next button)

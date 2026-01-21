@@ -388,25 +388,22 @@ class _TaskScreenState extends State<TaskScreen> {
                   Navigator.of(context).popUntil((route) => route.isFirst);
                 }
               },
-              showContinueButton: true,
+              // Phase 0 (step 12): show Next button. Phase 1 (step 13): tap-required, no Next button.
+              showContinueButton: _taskPhase == 0,
               continueButtonText: 'Next',
               onContinue: () async {
                 if (_taskPhase == 0) {
                   setState(() {
                     _taskPhase = 1;
                   });
-                  if (kDebugMode) {
-                    debugPrint(
-                        '[TASK_ONBOARDING] phase=0(goal) -> phase=1(selectPieces)');
-                  }
-                } else {
-                  // Advance to step 13 (taskGuidance)
+                  // Advance controller from taskIntro (step 12) to taskGuidance (step 13)
                   await GuidedOnboardingController.next();
+                  await Future.microtask(() {});
                   if (kDebugMode) {
                     final after =
                         GuidedOnboardingController.getCurrentStepNumber();
                     debugPrint(
-                        '[TASK_ONBOARDING] phase=1(selectPieces) -> advanceToStep=$after');
+                        '[TASK_ONBOARDING] phase=0(goal) -> phase=1(selectPieces), controllerStep=$after');
                   }
                 }
               },

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data/app_catalog.dart';
 import '../services/guided_onboarding.dart' as OldService;
 import '../onboarding/guided_onboarding_controller.dart';
+import '../onboarding/mobile_guided_bottom_sheet.dart';
 import '../widgets/guided_overlay.dart';
 import 'scenario_choice_screen.dart';
 
@@ -69,7 +70,19 @@ class _ScenarioCompleteScreenState extends State<ScenarioCompleteScreen> {
               builder: (context, constraints) {
                 return SingleChildScrollView(
                   controller: _scrollController,
-                  padding: EdgeInsets.fromLTRB(16, 16, 16, 24 + bottomInset),
+                  padding: EdgeInsets.fromLTRB(
+                    16,
+                    16,
+                    16,
+                    // Add extra bottom padding during step 15 to ensure content is visible above bottom sheet
+                    isGuided && stepNumber == 15
+                        ? 24 +
+                            bottomInset +
+                            MobileGuidedBottomSheet.getEstimatedHeight(
+                                context) +
+                            16
+                        : 24 + bottomInset,
+                  ),
                   child: ConstrainedBox(
                     constraints: BoxConstraints(
                       minHeight: constraints.maxHeight - 32, // Account for padding
@@ -160,6 +173,18 @@ class _ScenarioCompleteScreenState extends State<ScenarioCompleteScreen> {
                   });
                   return const SizedBox.shrink();
                 }
+                // Auto-scroll takeaway into view above bottom sheet
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted && _takeawayKey.currentContext != null) {
+                    Scrollable.ensureVisible(
+                      _takeawayKey.currentContext!,
+                      duration: const Duration(milliseconds: 300),
+                      curve: Curves.easeOut,
+                      alignment: 0.3,
+                      alignmentPolicy: ScrollPositionAlignmentPolicy.explicit,
+                    );
+                  }
+                });
                 return GuidedOverlay(
                   text:
                       "Each scenario ends with one key idea.\nThis is what you should remember.",
