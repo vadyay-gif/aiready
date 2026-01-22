@@ -110,7 +110,7 @@ class _ScenarioScreenState extends State<ScenarioScreen> {
     return sections;
   }
 
-  void _scrollToSection(GlobalKey key) {
+  void _scrollToSection(GlobalKey key, {double alignment = 0.25}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final ctx = key.currentContext;
@@ -119,7 +119,7 @@ class _ScenarioScreenState extends State<ScenarioScreen> {
         ctx,
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeOut,
-        alignment: 0.25,
+        alignment: alignment,
         alignmentPolicy: ScrollPositionAlignmentPolicy.explicit,
       );
     });
@@ -319,7 +319,7 @@ class _ScenarioScreenState extends State<ScenarioScreen> {
 
             // 5. Pro Tip
             if ((scenarioDef.proTip ?? "").trim().isNotEmpty) ...[
-              SizedBox(
+              RepaintBoundary(
                 key: isGuided ? _proTipKey : null,
                 child: _SectionCard(
                   title: "Pro Tip",
@@ -366,7 +366,10 @@ class _ScenarioScreenState extends State<ScenarioScreen> {
                     // Only scroll when sectionIndex changes (prevents repeated scrolling).
                     if (_lastSectionIndex != sectionIndex) {
                       _lastSectionIndex = sectionIndex;
-                      _scrollToSection(currentSection.key);
+                      // For step 10 (sectionIndex == 3), scroll higher so the
+                      // bottom sheet bubble does not cover the highlighted card.
+                      final align = sectionIndex == 3 ? 0.15 : 0.25;
+                      _scrollToSection(currentSection.key, alignment: align);
                     }
 
                     // DEBUG: Log section mapping and key/rect (temporary, removable)
@@ -489,7 +492,7 @@ class _SectionCard extends StatelessWidget {
   final String title;
   final Widget child;
 
-  const _SectionCard({required this.title, required this.child});
+  const _SectionCard({super.key, required this.title, required this.child});
 
   @override
   Widget build(BuildContext context) {

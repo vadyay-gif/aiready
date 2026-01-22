@@ -34,6 +34,22 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   void initState() {
     super.initState();
     _loadTip(); // first load
+    // Safety net: if guided onboarding is active but the step is not set or has
+    // already advanced past trackSelection while on Home, clamp it back to
+    // trackSelection so Step 4 overlay can appear deterministically.
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!GuidedOnboardingController.isActive) return;
+      final currentStepEnum = GuidedOnboardingController.currentStep;
+      final currentStepNumber =
+          GuidedOnboardingController.getCurrentStepNumber();
+      final bool needsClamp = currentStepEnum == GuidedOnboardingStep.none ||
+          currentStepNumber == 5 ||
+          currentStepNumber == 6;
+      if (needsClamp) {
+        await GuidedOnboardingController
+            .goTo(GuidedOnboardingStep.trackSelection);
+      }
+    });
 
     // Initialize progress totals after first frame to avoid setState during build
     WidgetsBinding.instance.addPostFrameCallback((_) {

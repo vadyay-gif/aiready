@@ -103,9 +103,7 @@ class _TaskScreenState extends State<TaskScreen> {
 
     final isTaskIntro = isGuided && stepNumber == 12;
     final isTaskGuidance = isGuided && stepNumber == 13;
-    // Local step number for display: phase 0 = 12, phase 1 = 13
-    final int displayStepNumber =
-        (isTaskIntro && _taskPhase == 1) ? 13 : (stepNumber ?? 12);
+    final isTaskFeedback = isGuided && stepNumber == 14;
 
     return Scaffold(
       appBar: AppBar(title: Text(scenarioDef.title)),
@@ -121,7 +119,7 @@ class _TaskScreenState extends State<TaskScreen> {
                 16,
                 16,
                 // Reserve space for guided bottom sheet + action bar during guided steps
-                isGuided && (stepNumber == 12 || stepNumber == 13)
+                isGuided && (stepNumber == 12 || stepNumber == 13 || stepNumber == 14)
                     ? MobileGuidedBottomSheet.getEstimatedHeight(context) +
                         16 +
                         kBottomActionBarHeightEstimate
@@ -283,7 +281,7 @@ class _TaskScreenState extends State<TaskScreen> {
             if (showFeedback) ...[
               const SizedBox(height: 24),
               Container(
-                key: (isGuided && isTaskGuidance)
+                key: (isGuided && isTaskFeedback)
                     ? _feedbackKey
                     : null,
                 decoration: BoxDecoration(
@@ -372,13 +370,13 @@ class _TaskScreenState extends State<TaskScreen> {
             GuidedOverlay(
               text: _taskPhase == 0
                   ? "Now it's your turn.\nYou'll see several options.\nFirst, review the task goal."
-                  : "Next, select the correct prompt pieces\nand then tap \"Check My Answer\".",
+                  : "Choose exactly $requiredSelectionCount correct building blocks to create a good prompt.\nTap the answers marked with green arrows.",
               highlightedKey:
                   _taskPhase == 0 ? _taskGoalKey : _promptPiecesKey,
               secondHighlightedKey:
                   _taskPhase == 1 ? _checkAnswerKey : null,
               scrollController: _scrollController,
-              currentStep: displayStepNumber,
+              currentStep: stepNumber, // Always use controller step (12 for taskIntro)
               onPreviousStep: () async {
                 await GuidedOnboardingController.goBack();
               },
@@ -411,14 +409,33 @@ class _TaskScreenState extends State<TaskScreen> {
                 }
               },
             )
-          else if (isTaskGuidance)
-            // Step 13: Feedback overlay with Next button
+          else if (isTaskGuidance && !showFeedback)
+            // Step 13: Selection phase - tap-required, no Next button
             GuidedOverlay(
-              text:
-                  "Here's your score and feedback.\nReview the results, then tap Next to continue.",
+              text: "Choose exactly $requiredSelectionCount correct building blocks to create a good prompt.\nTap the answers marked with green arrows.",
+              highlightedKey: _promptPiecesKey,
+              secondHighlightedKey: _checkAnswerKey,
+              scrollController: _scrollController,
+              currentStep: 13,
+              onPreviousStep: () async {
+                await GuidedOnboardingController.goBack();
+              },
+              onSkip: () async {
+                await GuidedOnboardingController.skip();
+                if (context.mounted) {
+                  Navigator.of(context).popUntil((route) => route.isFirst);
+                }
+              },
+              // Step 13 is tap-required: no Next button
+              showContinueButton: false,
+            )
+          else if (isTaskFeedback)
+            // Step 14: Feedback phase - show score and feedback, Next button to continue
+            GuidedOverlay(
+              text: "Here's your score and feedback.\nReview the results, then tap Next to continue.",
               highlightedKey: _feedbackKey,
               scrollController: _scrollController,
-              currentStep: stepNumber,
+              currentStep: 14,
               onPreviousStep: () async {
                 await GuidedOnboardingController.goBack();
               },
@@ -431,7 +448,7 @@ class _TaskScreenState extends State<TaskScreen> {
               showContinueButton: true,
               continueButtonText: 'Next',
               onContinue: () async {
-                // Advance to step 14 (resultsTakeaway) BEFORE navigation
+                // Advance to step 15 (resultsTakeaway) BEFORE navigation
                 await GuidedOnboardingController.next();
                 await Future.microtask(() {});
                 _navigateToResults();
@@ -477,7 +494,10 @@ class _TaskScreenState extends State<TaskScreen> {
                           children: [
                             Expanded(
                               child: OutlinedButton(
-                                onPressed: (isGuided && stepNumber == 12)
+                                onPressed: (isGuided &&
+                                        (stepNumber == 12 ||
+                                            stepNumber == 13 ||
+                                            stepNumber == 14))
                                     ? null
                                     : () => _skipTask(),
                                 child: const Text('Skip'),
@@ -534,7 +554,7 @@ class _TaskScreenState extends State<TaskScreen> {
     );
   }
 
-  void _checkAnswer() {
+  void _checkAnswer() async {
     final trackDef = kTracks[widget.trackIndex];
     final lessonDef = trackDef.lessons[widget.lessonIndex];
     final scenarioDef = lessonDef.scenarios[widget.scenarioIndex];
@@ -561,6 +581,19 @@ class _TaskScreenState extends State<TaskScreen> {
           ? '$baseFeedback Great job! You selected the right prompt pieces.'
           : '$baseFeedback ${scenarioDef.task?.coachingNote ?? 'Try again. Consider which pieces would make the most effective prompt.'}';
     });
+    
+    // Advance controller to taskFeedback (step 14) when feedback appears
+    final isGuided = GuidedOnboardingController.isActive &&
+        widget.trackIndex == 0 &&
+        widget.lessonIndex == 0 &&
+        widget.scenarioIndex == 0;
+    if (isGuided && GuidedOnboardingController.currentStep == GuidedOnboardingStep.taskGuidance) {
+      await GuidedOnboardingController.next();
+      if (kDebugMode) {
+        final after = GuidedOnboardingController.getCurrentStepNumber();
+        debugPrint('[TASK_ONBOARDING] Check Answer -> feedback shown, controllerStep=$after');
+      }
+    }
   }
 
   void _skipTask() {

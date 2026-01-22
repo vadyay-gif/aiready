@@ -12,6 +12,7 @@ enum GuidedOnboardingStep {
   scenarioOverview,
   taskIntro,
   taskGuidance,
+  taskFeedback,
   resultsTakeaway,
   infoSettings,
   completed,
@@ -205,6 +206,9 @@ class GuidedOnboardingController {
         _step = GuidedOnboardingStep.taskGuidance;
         break;
       case GuidedOnboardingStep.taskGuidance:
+        _step = GuidedOnboardingStep.taskFeedback;
+        break;
+      case GuidedOnboardingStep.taskFeedback:
         _step = GuidedOnboardingStep.resultsTakeaway;
         break;
       case GuidedOnboardingStep.resultsTakeaway:
@@ -309,8 +313,12 @@ class GuidedOnboardingController {
         _step = GuidedOnboardingStep.taskIntro;
         previousStep = _step;
         break;
-      case GuidedOnboardingStep.resultsTakeaway:
+      case GuidedOnboardingStep.taskFeedback:
         _step = GuidedOnboardingStep.taskGuidance;
+        previousStep = _step;
+        break;
+      case GuidedOnboardingStep.resultsTakeaway:
+        _step = GuidedOnboardingStep.taskFeedback;
         previousStep = _step;
         break;
       case GuidedOnboardingStep.infoSettings:
@@ -387,6 +395,8 @@ class GuidedOnboardingController {
         return 12;
       case GuidedOnboardingStep.taskGuidance:
         return 13;
+      case GuidedOnboardingStep.taskFeedback:
+        return 14;
       case GuidedOnboardingStep.resultsTakeaway:
         return 15;
       case GuidedOnboardingStep.infoSettings:
@@ -480,6 +490,9 @@ class GuidedOnboardingController {
       case GuidedOnboardingStep.taskIntro:
         return OldService.GuidedOnboardingStep.taskIntro;
       case GuidedOnboardingStep.taskGuidance:
+        return OldService.GuidedOnboardingStep.taskGuidance;
+      case GuidedOnboardingStep.taskFeedback:
+        // Map to taskGuidance for old service compatibility
         return OldService.GuidedOnboardingStep.taskGuidance;
       case GuidedOnboardingStep.resultsTakeaway:
         return OldService.GuidedOnboardingStep.resultsTakeaway;

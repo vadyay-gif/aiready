@@ -76,6 +76,8 @@ class _GuidedOverlayState extends State<GuidedOverlay> {
   // to be fully laid out before attempting measurement.
   int _step4ReadinessAttempts = 0;
   static const int _maxStep4ReadinessAttempts = 20;
+  // Track last logged step number for debug logging (only log when step changes)
+  int? _lastLoggedStepNumber;
 
   // Determine if we're in advanced mode (steps 4-16)
   bool get _isAdvancedMode => widget.currentStep != null && widget.currentStep! >= 4 && widget.currentStep! <= 16;
@@ -143,6 +145,7 @@ class _GuidedOverlayState extends State<GuidedOverlay> {
   /// Measure the actual rendered height of the bottom sheet.
   /// Called after layout to get accurate height for barrier positioning.
   /// Debounced: only setState if height changed by >1px to prevent loops.
+  /// Event-driven: triggers position verification when height is first measured or changes.
   void _measureBottomSheetHeight() {
     if (!mounted) return;
     _measurementScheduled = false; // Clear flag when measurement runs
@@ -150,15 +153,30 @@ class _GuidedOverlayState extends State<GuidedOverlay> {
     final box = _bottomSheetKey.currentContext?.findRenderObject() as RenderBox?;
     if (box != null && box.hasSize) {
       final measuredHeight = box.size.height;
+      final bool wasNull = _bottomSheetHeight == null;
       // Only update if height changed by more than 1 logical pixel
       if (_bottomSheetHeight == null || 
           (measuredHeight - _bottomSheetHeight!).abs() > 1.0) {
         if (kOnboardingDebug && kDebugMode) {
           debugPrint('[GUIDED_OVERLAY] Measured bottom sheet height: $measuredHeight (was: $_bottomSheetHeight)');
         }
+        final double? oldHeight = _bottomSheetHeight;
         setState(() {
           _bottomSheetHeight = measuredHeight;
         });
+        
+        // Event-driven: trigger position verification when height is measured/changed
+        // Only for steps that need it (10, 13, 14) and only once per measurement
+        if (wasNull || (oldHeight != null && (measuredHeight - oldHeight).abs() > 1.0)) {
+          final stepNumber = widget.currentStep ?? GuidedOnboardingController.getCurrentStepNumber();
+          if (stepNumber != null && (stepNumber == 10 || stepNumber == 13 || stepNumber == 14)) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) {
+                _verifyTargetAboveBottomSheet();
+              }
+            });
+          }
+        }
       }
     }
     // If not yet laid out, don't set estimated height - use 0.0 fallback in build()
@@ -199,9 +217,16 @@ class _GuidedOverlayState extends State<GuidedOverlay> {
     
     if (!mounted || currentToken != _syncToken) return;
     
-    // Verify target above bottom sheet for steps 7-10 and 13
-    if ((stepNumber >= 7 && stepNumber <= 10) || stepNumber == 13) {
-      await _verifyTargetAboveBottomSheet();
+    // Verify target above bottom sheet for steps 7-10, 13, and 14
+    // Event-driven: verification is triggered by _measureBottomSheetHeight when height is measured.
+    // If height is already known, verify immediately; otherwise wait for measurement callback.
+    if ((stepNumber >= 7 && stepNumber <= 10) || stepNumber == 13 || stepNumber == 14) {
+      if (_bottomSheetHeight != null) {
+        // Height already measured, verify immediately
+        await _verifyTargetAboveBottomSheet();
+      }
+      // If height not yet measured, _measureBottomSheetHeight will trigger verification
+      // via post-frame callback when measurement completes (event-driven, no polling)
     }
     
     if (!mounted || currentToken != _syncToken) return;
@@ -435,7 +460,7 @@ class _GuidedOverlayState extends State<GuidedOverlay> {
     } else if (stepNumber == 8 || stepNumber == 9) {
       alignment = 0.15;
     } else if (stepNumber == 10) {
-      alignment = 0.18;
+      alignment = 0.15;
     } else if (stepNumber == 13 || stepNumber == 14) {
       alignment = 0.18;
     } else {
@@ -581,6 +606,58 @@ class _GuidedOverlayState extends State<GuidedOverlay> {
       // Use measured height if available, otherwise use 0.0 (safe fallback)
       // Bottom sheet is Layer 3 (always on top), so it remains tappable even if barrier covers full screen
       final excludeHeight = _bottomSheetHeight ?? 0.0;
+      // Determine whether a tap-blocking barrier should be shown above the content.
+      // CRITICAL: Barrier logic must handle different step requirements:
+      // - Step 4 (Home): Must block ALL taps even before TrackTile key has context (prevents accidental track taps).
+      //   Once rect exists, barrier switches to cutout mode (only Track 1 tappable).
+      //   STRICTLY SCOPED: This special behavior applies ONLY when stepNumber == 4.
+      // - Step 13 (TaskScreen): Selection phase ONLY - barrier MUST be OFF by design so answers are tappable.
+      //   Step 13 is always selection phase; feedback phase is handled by Step 14.
+      // - Step 14 (TaskScreen): Feedback phase - barrier ON when highlighted widget exists and has context (normal gating).
+      // - All other steps: Barrier ON only when highlighted key(s) have context (normal gating).
+      final int? stepNumber =
+          GuidedOnboardingController.getCurrentStepNumber();
+      final bool hasAnyContext =
+          (widget.highlightedKey?.currentContext != null) ||
+              (widget.secondHighlightedKey?.currentContext != null);
+      final bool hasAnyKey = widget.highlightedKey != null || widget.secondHighlightedKey != null;
+      
+      // Step 4 special case: block ALL taps even before rect is computed (key exists but no context yet)
+      // This prevents accidental track taps before Track 1 is highlighted.
+      // Once rect exists (hasAnyContext), barrier switches to cutout mode allowing only Track 1.
+      // STRICTLY SCOPED: Only applies when stepNumber == 4; as soon as stepNumber != 4, normal gating applies.
+      final bool isStep4 = stepNumber == 4;
+      
+      // Step 13: Selection phase ONLY (barrier OFF by design)
+      // Step 13 is always in selection phase - TaskScreen shows overlay with promptPiecesKey/checkAnswerKey.
+      // These keys have context (they're mounted), but barrier MUST be OFF to allow tapping answers.
+      // Feedback phase is handled by Step 14, not Step 13.
+      final bool isStep13 = stepNumber == 13;
+      // Step 13: barrier OFF (always, by design - allows tapping answers during selection)
+      // This is an explicit boolean to prevent regressions - Step 13 always has barrier OFF
+      final bool isStep13Selection = isStep13;
+      
+      // Barrier logic per requirements:
+      // - Step 4: barrier ON if key exists (even without context)
+      // - Step 13: barrier OFF (explicitly excluded - selection phase only, answers must be tappable)
+      // - Step 14 and all other steps: barrier ON when context exists (normal gating)
+      final bool shouldShowBarrier = hasAnyKey && (
+        isStep4 || // Step 4: barrier on if key exists (blocks all until rect ready, then cutout mode)
+        (!isStep13Selection && hasAnyContext) // Step 14 and all other steps: barrier requires context (normal gating)
+      );
+      
+      // Debug logging: only log when stepNumber changes (not every frame)
+      if (kDebugMode && stepNumber != null && stepNumber != _lastLoggedStepNumber) {
+        _lastLoggedStepNumber = stepNumber;
+        debugPrint(
+          '[GUIDED_OVERLAY_BARRIER] stepNumber=$stepNumber, '
+          'shouldShowBarrier=$shouldShowBarrier, '
+          'isStep4=$isStep4, '
+          'isStep13Selection=$isStep13Selection, '
+          'hasAnyKey=$hasAnyKey, '
+          'hasAnyContext=$hasAnyContext'
+        );
+      }
       
       // Schedule measurement after this build completes (debounced)
       _scheduleMeasurement();
@@ -646,7 +723,7 @@ class _GuidedOverlayState extends State<GuidedOverlay> {
               ),
             ],
             // Tap blocker (excludes bottom sheet area - only covers content above sheet)
-            if (widget.highlightedKey != null || widget.secondHighlightedKey != null)
+            if (shouldShowBarrier)
               Positioned(
                 left: 0,
                 top: 0,
@@ -654,7 +731,8 @@ class _GuidedOverlayState extends State<GuidedOverlay> {
                 bottom: excludeHeight, // Exclude bottom sheet area (0.0 until measured)
                 child: GuidedOverlayBarrier(
                   targetKey: widget.highlightedKey ?? widget.secondHighlightedKey!,
-                  secondTargetKey: widget.highlightedKey != null ? widget.secondHighlightedKey : null,
+                  secondTargetKey:
+                      widget.highlightedKey != null ? widget.secondHighlightedKey : null,
                   child: const SizedBox.expand(),
                 ),
               ),
@@ -795,6 +873,11 @@ class _OverlayPainter extends CustomPainter {
 
     // If we have no target and no keys at all, do not draw anything.
     // This avoids a full-screen blocking scrim when we don't yet know the highlight area.
+    // EXCEPTION: If we have a key but no rect yet (e.g., Step 4 before TrackTile mounts),
+    // show full-screen dim so overlay is visible; cutout will appear once rect is computed.
+    final bool hasKeyButNoRect = (highlightedKey != null || secondHighlightedKey != null) &&
+        targetRect == null &&
+        secondTargetRect == null;
     if (targetRect == null && highlightedKey == null && secondHighlightedKey == null) {
       return;
     }
@@ -853,8 +936,14 @@ class _OverlayPainter extends CustomPainter {
     }
 
     // If we expected a highlight (we had a key or targetRect) but couldn't compute a rect yet,
-    // draw nothing this frame and try again on the next paint instead of blocking the whole screen.
+    // show full-screen dim (for Step 4 visibility) and try again on the next paint.
+    // Once rect is computed, the cutout will appear.
     if (highlightedRects.isEmpty) {
+      if (hasKeyButNoRect) {
+        // Show full-screen dim when we have a key but no rect yet (Step 4 case)
+        final dimPaint = Paint()..color = dimColor;
+        canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), dimPaint);
+      }
       return;
     }
     

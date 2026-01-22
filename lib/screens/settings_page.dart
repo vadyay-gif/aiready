@@ -267,8 +267,8 @@ class _SettingsPageState extends State<SettingsPage> {
           
           const SizedBox(height: 24),
           
-          // Diagnostics Section
-          _buildSectionHeader(context, 'Diagnostics'),
+          // Build Information Section
+          _buildSectionHeader(context, 'Build Information'),
           
           Card(
             margin: const EdgeInsets.only(bottom: 8),
@@ -278,16 +278,6 @@ class _SettingsPageState extends State<SettingsPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _buildDiagnosticRow('Build ID', BuildInfo.kBuildId),
-                  const SizedBox(height: 8),
-                  _buildDiagnosticRow('Onboarding steps', '${BuildInfo.kExpectedOnboardingSteps}'),
-                  const SizedBox(height: 8),
-                  _buildDiagnosticRow('Track 7 title', BuildInfo.kTrack7Title),
-                  const SizedBox(height: 8),
-                  _buildDiagnosticRow('Guided overlay present', '${BuildInfo.kGuidedOverlayPresent}'),
-                  const SizedBox(height: 8),
-                  _buildDiagnosticRow('Onboarding completed', '${_onboardingCompleted ?? "?"}'),
-                  const SizedBox(height: 8),
-                  _buildDiagnosticRow('Onboarding active', '${_onboardingActive ?? "?"}'),
                 ],
               ),
             ),
