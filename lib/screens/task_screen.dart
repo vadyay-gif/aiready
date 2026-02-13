@@ -38,7 +38,6 @@ class _TaskScreenState extends State<TaskScreen> {
   String feedbackMessage = '';
   int correctCount = 0;
   final GlobalKey _taskGoalKey = GlobalKey();
-  final GlobalKey _feedbackKey = GlobalKey();
   final GlobalKey _resultsSectionKey = GlobalKey(debugLabel: 'results_section');
   final GlobalKey _doneButtonKey = GlobalKey();
   final GlobalKey _promptPiecesKey = GlobalKey();
@@ -46,9 +45,7 @@ class _TaskScreenState extends State<TaskScreen> {
   final GlobalKey _answersAreaKey = GlobalKey(debugLabel: 'answers_area');
   final Map<int, GlobalKey> _answerKeys = {};
   final ScrollController _scrollController = ScrollController();
-  int _taskPhase = 0; // 0 = goal intro, 1 = select prompt pieces
   int? _lastStepNumber;
-  bool _phaseResetScheduled = false;
   bool _didAutoScrollForStep14 = false;
   bool _didAutoScrollForStep13 = false;
   int? _lastStepEntryTick;
@@ -105,10 +102,8 @@ class _TaskScreenState extends State<TaskScreen> {
         }
 
         // Derive step identity ONLY from controller step number
-        // Do NOT use _taskPhase to determine onboarding step
         final isTaskIntro = isGuided && stepNumber == 12;
         final isTaskGuidance = isGuided && stepNumber == 13;
-        final isTaskFeedback = isGuided && stepNumber == 14;
 
         return Scaffold(
           appBar: AppBar(title: Text(scenarioDef.title)),
@@ -314,7 +309,7 @@ class _TaskScreenState extends State<TaskScreen> {
                                             ),
                                             if (showArrow) ...[
                                               const SizedBox(width: 8),
-                                              Icon(
+                                              const Icon(
                                                 Icons.arrow_back,
                                                 color: Colors.green,
                                                 size: 24,
@@ -457,8 +452,7 @@ class _TaskScreenState extends State<TaskScreen> {
                 valueListenable: GuidedOnboardingController.stepEntryTick,
                 builder: (context, tick, _) {
                   // Detect step entry for Steps 13-14
-                  if (liveStepNumber != null &&
-                      liveStepNumber >= 13 &&
+                  if (liveStepNumber >= 13 &&
                       liveStepNumber <= 14 &&
                       tick != _lastStepEntryTick) {
                     _lastStepEntryTick = tick;
@@ -505,30 +499,24 @@ class _TaskScreenState extends State<TaskScreen> {
                         if (!mounted || _didAutoScrollForStep13) return;
                         final ctx = _answersAreaKey.currentContext;
                         if (ctx != null && _scrollController.hasClients) {
-                          final media = MediaQuery.of(ctx);
-                          final topSafeY = media.padding.top + kToolbarHeight + 12.0;
-                          final topSlackUsed = 0.0;
-                          final paddingActive = MobileGuidedBottomSheet.measuredHeight.value > 0.0;
-                          final measuredHeight = MobileGuidedBottomSheet.measuredHeight.value;
-                          final alignment = 0.01;
-                          
+                          const alignment = 0.01;
+
                           final renderObject = ctx.findRenderObject();
                           if (renderObject != null) {
                             final viewport = RenderAbstractViewport.of(renderObject);
-                            if (viewport != null) {
-                              final reveal = viewport.getOffsetToReveal(renderObject, alignment);
-                              final position = _scrollController.position;
-                              final target = reveal.offset.clamp(
-                                position.minScrollExtent,
-                                position.maxScrollExtent,
-                              );
-                              _scrollController.animateTo(
-                                target,
-                                duration: const Duration(milliseconds: 250),
-                                curve: Curves.easeOut,
-                              );
-                              if (mounted) setState(() => _didAutoScrollForStep13 = true);
-                            }
+                            if (viewport == null) return; // ignore: unnecessary_null_comparison
+                            final reveal = viewport.getOffsetToReveal(renderObject, alignment);
+                            final position = _scrollController.position;
+                            final target = reveal.offset.clamp(
+                              position.minScrollExtent,
+                              position.maxScrollExtent,
+                            );
+                            _scrollController.animateTo(
+                              target,
+                              duration: const Duration(milliseconds: 250),
+                              curve: Curves.easeOut,
+                            );
+                            if (mounted) setState(() => _didAutoScrollForStep13 = true);
                           }
                         }
                       });
@@ -664,10 +652,10 @@ class _TaskScreenState extends State<TaskScreen> {
                     if (ctx != null && _scrollController.hasClients) {
                       final media = MediaQuery.of(ctx);
                       final topSafeY = media.padding.top + kToolbarHeight + 12.0;
-                      final topSlackUsed = 0.0; // Step 13: align closely to top safe area
+                      const topSlackUsed = 0.0; // Step 13: align closely to top safe area
                       final paddingActive = MobileGuidedBottomSheet.measuredHeight.value > 0.0;
                       final measuredHeight = MobileGuidedBottomSheet.measuredHeight.value;
-                      final alignment = 0.01; // Target topSafeY
+                      const alignment = 0.01; // Target topSafeY
                       
                       if (kDebugMode) {
                         debugPrint(
@@ -680,9 +668,9 @@ class _TaskScreenState extends State<TaskScreen> {
                       final renderObject = ctx.findRenderObject();
                       if (renderObject != null) {
                         final viewport = RenderAbstractViewport.of(renderObject);
-                        if (viewport != null) {
-                          final reveal = viewport.getOffsetToReveal(renderObject, alignment);
-                          final position = _scrollController.position;
+                        if (viewport == null) return; // ignore: unnecessary_null_comparison
+                        final reveal = viewport.getOffsetToReveal(renderObject, alignment);
+                        final position = _scrollController.position;
                           final target = reveal.offset.clamp(
                             position.minScrollExtent,
                             position.maxScrollExtent,
@@ -694,7 +682,6 @@ class _TaskScreenState extends State<TaskScreen> {
                           ).then((_) {
                             WidgetsBinding.instance.addPostFrameCallback((_) {
                               if (!mounted || !_scrollController.hasClients) return;
-                              final offset1 = _scrollController.position.pixels;
                               final box = renderObject as RenderBox?;
                               if (box != null && box.hasSize) {
                                 final topLeft = box.localToGlobal(Offset.zero);
@@ -724,7 +711,6 @@ class _TaskScreenState extends State<TaskScreen> {
                               }
                             });
                           });
-                        }
                       }
                     }
                   });
@@ -1000,30 +986,6 @@ class _TaskScreenState extends State<TaskScreen> {
       context,
       MaterialPageRoute(
         builder: (_) => ScenarioIncompleteScreen(
-          trackIndex: widget.trackIndex,
-          lessonIndex: widget.lessonIndex,
-          scenarioIndex: widget.scenarioIndex,
-        ),
-      ),
-    );
-  }
-
-  void _navigateToResults() {
-    // Mark scenario as completed in progress store
-    final trackDef = kTracks[widget.trackIndex];
-    context.read<ProgressStore>().setScenarioCompleted(
-          trackDef.title,
-          widget.lessonIndex,
-          widget.scenarioIndex,
-        );
-
-    // Progress guided onboarding if active (already advanced in onContinue above)
-    // This method is called after step 13 -> 14 advancement
-
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(
-        builder: (_) => ScenarioCompleteScreen(
           trackIndex: widget.trackIndex,
           lessonIndex: widget.lessonIndex,
           scenarioIndex: widget.scenarioIndex,

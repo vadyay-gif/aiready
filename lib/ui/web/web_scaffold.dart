@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../adaptive/adaptive_dimensions.dart';
-import '../adaptive/adaptive_insets.dart';
 
 /// Web/desktop-optimized scaffold.
 /// 

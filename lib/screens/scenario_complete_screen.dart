@@ -1,6 +1,5 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import '../data/app_catalog.dart';
 import '../onboarding/guided_onboarding_controller.dart';
 import '../onboarding/guided_onboarding_navigation.dart';
@@ -10,9 +9,6 @@ import '../widgets/guided_overlay.dart';
 import 'scenario_choice_screen.dart';
 
 const double kMinGapAboveSheet = 24.0;
-const double _kBottomSlack = 8.0;
-const double _kTopSlack = 8.0;
-const double _kTopSlackStep15 = 0.0; // Step 15: align closely to top safe area
 
 class ScenarioCompleteScreen extends StatefulWidget {
   final int trackIndex;
@@ -31,7 +27,6 @@ class ScenarioCompleteScreen extends StatefulWidget {
 }
 
 class _ScenarioCompleteScreenState extends State<ScenarioCompleteScreen> {
-  final GlobalKey _takeawayKey = GlobalKey();
   final GlobalKey _takeawayAnchorKey = GlobalKey();
   final GlobalKey _takeawayHeaderKey = GlobalKey();
   final GlobalKey _completionHeaderKey = GlobalKey();
@@ -41,40 +36,6 @@ class _ScenarioCompleteScreenState extends State<ScenarioCompleteScreen> {
   bool _didFixOverlapForStep15 = false;
   int? _lastLoggedStep;
   int? _lastStepEntryTick;
-
-  /// Alignment for getOffsetToReveal; used only for step 15.
-  static double _alignmentForStepNumber(int stepNumber) {
-    switch (stepNumber) {
-      case 8:
-      case 9:
-        return 0.06;
-      case 10:
-      case 11:
-        return 0.04;
-      case 15:
-        return 0.01; // Target topSafeY since bottom is safe by padding
-      default:
-        return 0.10;
-    }
-  }
-
-  double? _computeRevealOffsetForKey(GlobalKey key,
-      {double alignment = 0.10}) {
-    final ctx = key.currentContext;
-    if (ctx == null) return null;
-    final renderObject = ctx.findRenderObject();
-    if (renderObject == null) return null;
-    final viewport = RenderAbstractViewport.of(renderObject);
-    if (viewport == null) return null;
-    final reveal = viewport.getOffsetToReveal(renderObject, alignment);
-    if (!_scrollController.hasClients) return null;
-    final position = _scrollController.position;
-    final target = reveal.offset.clamp(
-      position.minScrollExtent,
-      position.maxScrollExtent,
-    );
-    return target;
-  }
 
   @override
   void dispose() {
@@ -349,6 +310,7 @@ class _ScenarioCompleteScreenState extends State<ScenarioCompleteScreen> {
                             return;
                           }
 
+                          if (!mounted || !context.mounted) return;
                           // Step 15: Compute rectNow from actual key
                           final ctx = _takeawayAnchorKey.currentContext;
                           if (ctx == null) {
@@ -367,7 +329,7 @@ class _ScenarioCompleteScreenState extends State<ScenarioCompleteScreen> {
                             );
                             return;
                           }
-                          
+                          if (!mounted || !context.mounted) return;
                           final topLeft = box.localToGlobal(Offset.zero);
                           final rectNow = Rect.fromLTWH(
                             topLeft.dx,
@@ -375,7 +337,6 @@ class _ScenarioCompleteScreenState extends State<ScenarioCompleteScreen> {
                             box.size.width,
                             box.size.height,
                           );
-                          
                           // Compute desiredTop
                           final media = MediaQuery.of(ctx);
                           final topSafeY = media.padding.top + kToolbarHeight + 12.0;
@@ -406,17 +367,15 @@ class _ScenarioCompleteScreenState extends State<ScenarioCompleteScreen> {
                               curve: Curves.easeOut,
                             );
                             await WidgetsBinding.instance.endOfFrame;
-                            
+                            if (!mounted) return;
+
                             final offset1 = _scrollController.position.pixels;
                             if (kDebugMode) {
                               debugPrint(
                                 '[SCENARIO_COMPLETE] step=15 scrolled offset1=$offset1',
                               );
                             }
-                            
-                            if (mounted) {
-                              setState(() => _didFixOverlapForStep15 = true);
-                            }
+                            setState(() => _didFixOverlapForStep15 = true);
                           } else {
                             if (kDebugMode) {
                               debugPrint(
@@ -424,9 +383,7 @@ class _ScenarioCompleteScreenState extends State<ScenarioCompleteScreen> {
                                 'delta.abs()=${delta.abs()} targetDelta.abs()=${(target - offset0).abs()}',
                               );
                             }
-                            if (mounted) {
-                              setState(() => _didFixOverlapForStep15 = true);
-                            }
+                            setState(() => _didFixOverlapForStep15 = true);
                           }
                         });
                       }

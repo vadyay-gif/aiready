@@ -179,14 +179,15 @@ Future<void> handleGuidedPrevious(BuildContext context) async {
   }
   
   final targetStepNumber = GuidedOnboardingController.getCurrentStepNumber();
-  
+  if (!context.mounted) return;
+
   if (kDebugMode) {
     debugPrint('[GUIDED_NAV] PREV route=$routeName enum=$currentStep stepNumber=$currentStepNumber '
         '-> enumAfter=$targetStep stepNumber=$targetStepNumber');
   }
 
   // Get the target screen using the resume routing map
-  final targetScreen = _getScreenForStep(targetStep ?? GuidedOnboardingStep.none, targetStepNumber);
+  final targetScreen = _getScreenForStep(targetStep, targetStepNumber);
   
   if (kDebugMode) {
     debugPrint('[GUIDED_NAV] PREV: targetScreen=${targetScreen?.runtimeType} for step=$targetStep stepNumber=$targetStepNumber');

@@ -16,7 +16,6 @@ import '../onboarding/guided_onboarding_navigation.dart';
 import 'track_screen.dart';
 import 'scenario_screen.dart';
 import 'settings_page.dart';
-import 'onboarding_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -30,7 +29,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   final GlobalKey _track1Key = GlobalKey();
   final GlobalKey _settingsKey = GlobalKey();
   final ScrollController _scrollController = ScrollController();
-  bool _step4HighlightReady = false;
   bool _didAutoScrollForStep16 = false;
   int? _lastLoggedStep;
   bool _wasOnboardingActive = false;
@@ -112,7 +110,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   @override
   Widget build(BuildContext context) {
-    final store = context.watch<ProgressStore>();
+    context.watch<ProgressStore>();
     final bottomPad = MediaQuery.of(context).padding.bottom;
     final media = MediaQuery.of(context)
         .copyWith(textScaler: const TextScaler.linear(1.0));
@@ -303,6 +301,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                     await GuidedOnboardingController.next();
                                     await Future.microtask(() {});
                                   }
+                                  if (!context.mounted) return;
 
                                   // Navigate to TrackScreen (step 5 overlay will appear immediately)
                                   Navigator.push(
@@ -313,6 +312,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                     ),
                                   );
                                 } else {
+                                  if (!context.mounted) return;
                                   // Show coming soon message
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     SnackBar(
@@ -351,6 +351,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                   );
                                   await GuidedOnboardingController.goNext();
                                 }
+                                if (!context.mounted) return;
                                 Navigator.push(
                                   context,
                                   MaterialPageRoute(
@@ -384,7 +385,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                 Expanded(
                                     child: Text(_tip.isNotEmpty
                                         ? 'Daily AI Tip: $_tip'
-                                        : 'Daily AI Tip: \"Summarize a meeting into action items.\"')),
+                                        : 'Daily AI Tip: "Summarize a meeting into action items."')),
                                 const Icon(Icons.chevron_right),
                               ],
                             ),
@@ -409,11 +410,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                   highlightedKey: _track1Key,
                   scrollController: _scrollController,
                   currentStep: stepNumber,
-                  onHighlightReadyChanged: (ready) {
+                  onHighlightReadyChanged: (_) {
                     if (!mounted) return;
-                    setState(() {
-                      _step4HighlightReady = ready;
-                    });
+                    setState(() {});
                   },
                   onPreviousStep: null,
                   onSkip: () => handleGuidedSkip(context),

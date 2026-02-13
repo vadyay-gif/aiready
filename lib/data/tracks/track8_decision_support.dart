@@ -3,9 +3,9 @@ import '../app_catalog.dart';
 /// Track 8 – Decision Support (lessons 1–5)
 List<LessonDef> buildTrack8Lessons() {
   return [
-    LessonDef(
+    const LessonDef(
       title: 'Use AI to Compare Options Clearly',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Turn a messy comparison into a clean comparison of two options',
           situation:
@@ -159,9 +159,9 @@ List<LessonDef> buildTrack8Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Turn AI Output Into Simple Explanations',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Convert technical AI output into plain-language explanation',
           situation:
@@ -313,9 +313,9 @@ List<LessonDef> buildTrack8Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Turn Problems Into Clear Decision Criteria',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Turn vague concerns into specific decision criteria',
           situation:
@@ -464,9 +464,9 @@ List<LessonDef> buildTrack8Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Turn Scenarios Into Decision Paths',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Turn a scenario into clear decision paths',
           situation:
@@ -617,9 +617,9 @@ List<LessonDef> buildTrack8Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Turn Risks Into Clear Mitigation Options',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Turn a risk description into mitigation options',
           situation:

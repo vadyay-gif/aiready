@@ -3,7 +3,6 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:provider/provider.dart';
 import '../services/progress_store.dart';
-import '../services/onboarding_service.dart';
 import '../app/build_info.dart';
 import '../onboarding/guided_onboarding_controller.dart';
 import '../onboarding/guided_onboarding_navigation.dart';
@@ -308,7 +307,6 @@ class _SettingsPageState extends State<SettingsPage> {
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   if (!mounted) return;
                   final ctx = _repeatOnboardingKey.currentContext;
-                  final contextNull = ctx == null;
                   final s = ctx != null ? Scrollable.maybeOf(ctx) : null;
                   final didScroll = s != null;
                   OnboardingDebugLog.log(
@@ -475,14 +473,13 @@ class _SettingsPageState extends State<SettingsPage> {
                   entries: entries,
                 );
                 await Clipboard.setData(ClipboardData(text: text));
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
                       content: Text('Diagnostics copied to clipboard'),
                       duration: Duration(seconds: 2),
                     ),
                   );
-                }
               },
               child: const Text('Copy diagnostics'),
             ),

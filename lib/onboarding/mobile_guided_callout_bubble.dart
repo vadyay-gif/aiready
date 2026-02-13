@@ -1,6 +1,4 @@
 import 'package:flutter/material.dart';
-import '../ui/adaptive/adaptive_dimensions.dart';
-import '../ui/adaptive/adaptive_insets.dart';
 import 'guided_overlay_geometry.dart';
 
 /// Mobile-optimized callout bubble for onboarding.
@@ -91,7 +89,6 @@ class MobileGuidedCalloutBubble extends StatelessWidget {
     } else {
       // Fallback: bottom-sheet style (pin to bottom, keep cutout visible)
       // Ensure bubble doesn't cover the highlighted target
-      final targetCenterY = (targetTop + targetBottom) / 2;
       final bubbleCenterY = screenSize.height - safeAreaInsets.bottom - bubblePaddingFromEdges - (bubbleHeight / 2);
       
       // If bubble would cover target, place it above target center
@@ -109,7 +106,7 @@ class MobileGuidedCalloutBubble extends StatelessWidget {
       right = bubblePaddingFromEdges;
     }
 
-    // Final safety check: ensure bubble stays within bounds
+    // Final safety check: ensure bubble stays within bounds (when top was set)
     if (top != null) {
       final minTop = safeAreaInsets.top + bubblePaddingFromEdges;
       final maxTop = screenSize.height - bubbleHeight - bottomNavReserve;
@@ -119,8 +116,8 @@ class MobileGuidedCalloutBubble extends StatelessWidget {
     return Positioned(
       top: top,
       bottom: bottom,
-      left: left != null ? left + safeAreaInsets.left : null,
-      right: right != null ? right + safeAreaInsets.right : null,
+      left: left + safeAreaInsets.left,
+      right: right + safeAreaInsets.right,
       child: IgnorePointer(
         ignoring: false, // Bubble buttons must remain tappable
         child: ConstrainedBox(

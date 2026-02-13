@@ -75,7 +75,7 @@ class _ScenarioScreenState extends State<ScenarioScreen> {
     final renderObject = ctx.findRenderObject();
     if (renderObject == null) return null;
     final viewport = RenderAbstractViewport.of(renderObject);
-    if (viewport == null) return null;
+    if (viewport == null) return null; // ignore: unnecessary_null_comparison
     if (!_scrollController.hasClients) return null;
     final reveal = viewport.getOffsetToReveal(renderObject, alignment);
     final position = _scrollController.position;
@@ -318,8 +318,7 @@ class _ScenarioScreenState extends State<ScenarioScreen> {
                 valueListenable: GuidedOnboardingController.stepEntryTick,
                 builder: (context, tick, _) {
                   // Detect step entry for Steps 9-11 (scenarioOverview)
-                  if (liveStepNumber != null &&
-                      liveStepNumber >= 9 &&
+                  if (liveStepNumber >= 9 &&
                       liveStepNumber <= 11 &&
                       tick != _lastStepEntryTick) {
                     _lastStepEntryTick = tick;
@@ -392,7 +391,7 @@ class _ScenarioScreenState extends State<ScenarioScreen> {
 
                     // Extra diagnostics for Steps 10 & 11 only.
                     if (kDebugMode && (sectionIndex == 3 || sectionIndex == 4)) {
-                      final ctx = highlightKey?.currentContext;
+                      final ctx = highlightKey.currentContext;
                       debugPrint(
                         '[SCENARIO_OVERLAY] diag sectionIndex=$sectionIndex '
                         'hasVariants=$hasVariants hasProTip=$hasProTip '
@@ -425,7 +424,12 @@ class _ScenarioScreenState extends State<ScenarioScreen> {
                       sectionIndex != _lastAutoScrolledSectionIndex) {
                     _lastAutoScrolledSectionIndex = sectionIndex;
                     final int capturedIdx = sectionIndex;
-                    final GlobalKey? capturedKey = highlightKey;
+                    // ignore: unnecessary_nullable_for_final_variable_declarations - null check used for control flow
+                    final GlobalKey? capturedKeyOrNull = highlightKey;
+                    if (capturedKeyOrNull == null) {
+                      // Skip scroll assist when no highlight key
+                    } else {
+                    final GlobalKey capturedKey = capturedKeyOrNull;
                     final int stepNum = 7 + capturedIdx.clamp(0, 4);
                     final double align =
                         _alignmentForStepNumber(stepNum);
@@ -487,19 +491,26 @@ class _ScenarioScreenState extends State<ScenarioScreen> {
                           }
                         }
                         Future<void>(() async {
-                          if (!mounted) return;
+                          if (!mounted) {
+                            return;
+                          }
                           if (GuidedOnboardingController.scenarioSectionIndex !=
-                              capturedIdx) return;
-                          if (capturedKey == null) return;
+                              capturedIdx) {
+                            return;
+                          }
+                          if (!mounted) return;
                           final ctx = capturedKey.currentContext;
                           if (ctx == null) return;
+                          if (!mounted) return;
 
                           // Unified deterministic scroll-to-safe-rect for Steps 8-11.
+                          final localCtx = capturedKey.currentContext;
+                          if (localCtx == null) return;
+                          if (!mounted) return;
                           if (capturedIdx >= 1 &&
                               capturedIdx <= 4 &&
-                              _scrollController.hasClients &&
-                              capturedKey.currentContext != null) {
-                            final localCtx = capturedKey.currentContext!;
+                              _scrollController.hasClients) {
+                            if (!context.mounted) return;
                             final media = MediaQuery.of(localCtx);
                             final screenH = media.size.height;
                             final double rawSheetH =
@@ -525,6 +536,7 @@ class _ScenarioScreenState extends State<ScenarioScreen> {
                             double bubbleTopY = double.infinity;
                             bool usingBubbleTopY = false;
                             if ((stepNum == 10 || stepNum == 11) && !paddingActive) {
+                              if (!context.mounted) return;
                               final bubbleCtx = _instructionBubbleKey.currentContext;
                               if (bubbleCtx != null) {
                                 final bubbleBox =
@@ -613,6 +625,7 @@ class _ScenarioScreenState extends State<ScenarioScreen> {
                               curve: Curves.easeOut,
                             );
                             await WidgetsBinding.instance.endOfFrame;
+                            if (!mounted) return;
 
                             // PHASE 1 RECT SNAPSHOT: Use overlay stableRect as source
                             final double offset1 = _scrollController.position.pixels;
@@ -705,6 +718,7 @@ class _ScenarioScreenState extends State<ScenarioScreen> {
                       }
                       tryRun(0);
                     });
+                  }
                   }
 
                   return GuidedOverlay(

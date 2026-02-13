@@ -3,9 +3,9 @@ import '../app_catalog.dart';
 /// Track 1 – Everyday Communication (lessons 1–5)
 List<LessonDef> buildTrack1Lessons() {
   return [
-    LessonDef(
+    const LessonDef(
       title: 'Write Clearly From Scratch',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Write a Professional Email From Brief Notes',
           situation:
@@ -196,9 +196,9 @@ List<LessonDef> buildTrack1Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Rewrite for Clarity',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Fix a Confusing Email So It’s Clear and Concise',
           situation:
@@ -384,9 +384,9 @@ List<LessonDef> buildTrack1Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Adjust Tone for Any Situation',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Make a Message More Professional',
           situation:
@@ -571,9 +571,9 @@ List<LessonDef> buildTrack1Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Expand or Shorten With Purpose',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Shorten a Long Email to the Essentials',
           situation:
@@ -756,9 +756,9 @@ List<LessonDef> buildTrack1Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Create Useful Everyday Templates',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Create a Reusable Email Template for Sharing Documents',
           situation:

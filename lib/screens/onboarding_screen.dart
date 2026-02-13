@@ -75,7 +75,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       valueListenable: GuidedOnboardingController.stepNotifier,
       builder: (context, currentStepEnum, _) {
         final isGuided = GuidedOnboardingController.isActive;
-        final currentStep = GuidedOnboardingController.currentStep;
         // For intro steps use the builder parameter so counter/overlay get correct step on first launch.
         int? stepNumber;
         if (currentStepEnum == GuidedOnboardingStep.intro1) {

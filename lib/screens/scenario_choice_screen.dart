@@ -5,7 +5,6 @@ import '../widgets/scenario_option_tile.dart';
 import '../widgets/guided_overlay.dart';
 import '../onboarding/guided_onboarding_navigation.dart';
 import '../onboarding/guided_onboarding_controller.dart';
-import '../onboarding/onboarding_debug_log.dart';
 import 'scenario_screen.dart';
 
 class ScenarioChoiceScreen extends StatefulWidget {
@@ -89,15 +88,12 @@ class _ScenarioChoiceScreenState extends State<ScenarioChoiceScreen> {
                             itemBuilder: (context, index) {
                               final scenario = scenarios[index];
                               final isGuidedTarget = isGuided && index == 0; // Highlight first scenario for visual guidance
-                              final allowTap = true; // Allow any scenario tap when guided (step advances for any selection)
-
                               return ScenarioOptionTile(
                                 key: isGuidedTarget ? _scenario1Key : null,
                                 title: scenario.title,
                                 subtitle: scenario.situation.split('.').first,
                                 icon: Icons.assignment_outlined,
                                 onTap: () {
-                                  if (!allowTap) return;
                                   // Step 6 -> Step 7: Advance step when ANY scenario is selected (if guided and on step 6)
                                   if (GuidedOnboardingController.isActive &&
                                       GuidedOnboardingController.currentStep == GuidedOnboardingStep.scenarioSelection) {

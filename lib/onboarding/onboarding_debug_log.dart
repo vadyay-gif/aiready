@@ -117,7 +117,9 @@ class OnboardingDebugLog {
   static int? lastStepNumberAfterAction;
 
   /// Append a new log entry into the ring buffer.
+  /// No-op in release; only runs in debug so release builds produce no logs.
   static void log(String category, String message) {
+    if (!kDebugMode) return;
     final entry = OnboardingLogEntry(
       timestamp: DateTime.now(),
       category: category,
@@ -127,21 +129,23 @@ class OnboardingDebugLog {
     if (_entries.length > _maxEntries) {
       _entries.removeAt(0);
     }
-
-    if (kDebugMode) {
-      debugPrint('[ONBOARDING][$category] $message');
-    }
+    debugPrint('[ONBOARDING][$category] $message');
   }
 
   /// Expose entries with newest first for display.
+  /// Returns empty list in release so diagnostics panel shows nothing.
   static List<OnboardingLogEntry> get entries =>
-      List<OnboardingLogEntry>.unmodifiable(_entries.reversed);
+      kDebugMode
+          ? List<OnboardingLogEntry>.unmodifiable(_entries.reversed)
+          : List<OnboardingLogEntry>.unmodifiable(<OnboardingLogEntry>[]);
 
   /// Convenience helper for recording step transitions.
+  /// No-op in release.
   static void recordStepTransition({
     required String from,
     required String to,
   }) {
+    if (!kDebugMode) return;
     lastStepTransition = '$from -> $to';
     log('controller', 'step transition $from -> $to');
   }

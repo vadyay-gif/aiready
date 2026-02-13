@@ -1,7 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
-import '../onboarding/guided_overlay_geometry.dart';
-import '../onboarding/guided_onboarding_controller.dart';
 import '../onboarding/guided_overlay_barrier.dart';
 import '../onboarding/mobile_guided_bottom_sheet.dart';
 import '../onboarding/onboarding_debug_log.dart';
@@ -98,20 +95,10 @@ class _GuidedOverlayState extends State<GuidedOverlay> with SingleTickerProvider
   
   bool _measurementScheduled = false;
   
-  // Track step/target identity for reset detection
-  GlobalKey? _lastHighlightedKey;
-  GlobalKey? _lastSecondHighlightedKey;
-  int? _lastCurrentStep;
-
   @override
   void initState() {
     super.initState();
     widget.scrollController?.addListener(_onScroll);
-    
-    // Track initial step/target identity
-    _lastHighlightedKey = widget.highlightedKey;
-    _lastSecondHighlightedKey = widget.secondHighlightedKey;
-    _lastCurrentStep = widget.currentStep;
     
     // Initialize animation controller
     _rectAnimController = AnimationController(
@@ -158,11 +145,6 @@ class _GuidedOverlayState extends State<GuidedOverlay> with SingleTickerProvider
       _framesSinceFirstCandidate = 0;
       _paintRect = null;
       _rectAnimController.reset();
-      
-      // Update tracked identity
-      _lastHighlightedKey = widget.highlightedKey;
-      _lastSecondHighlightedKey = widget.secondHighlightedKey;
-      _lastCurrentStep = widget.currentStep;
       
       _measureRects();
     }
@@ -458,14 +440,14 @@ class _GuidedOverlayState extends State<GuidedOverlay> with SingleTickerProvider
     
     // IMPROVEMENT 1: Barrier vs Cutout gating
     // Separate target mounted check from cutout ready check
-    final bool _targetMounted = _isTargetMounted();
-    final bool _cutoutReady = _stableRect != null;
+    final bool targetMounted = _isTargetMounted();
+    final bool cutoutReady = _stableRect != null;
     
     // Barrier shows when target is mounted (even if cutout not ready yet)
-    final bool shouldShowBarrier = hasAnyKey && _targetMounted;
+    final bool shouldShowBarrier = hasAnyKey && targetMounted;
     
     // If target not mounted => render nothing (barrier OFF)
-    if (!_targetMounted) {
+    if (!targetMounted) {
       return Stack(
         children: [
           // Only show bottom sheet if step is set
@@ -507,7 +489,7 @@ class _GuidedOverlayState extends State<GuidedOverlay> with SingleTickerProvider
                 builder: (context, constraints) {
                   final Rect? effectiveRect = isStep4 && _candidateRect != null
                       ? _candidateRect
-                      : (_cutoutReady ? paintRect : null);
+                      : (cutoutReady ? paintRect : null);
                   return CustomPaint(
                     key: _paintSurfaceKey,
                     size: Size(constraints.maxWidth, constraints.maxHeight),
@@ -534,13 +516,13 @@ class _GuidedOverlayState extends State<GuidedOverlay> with SingleTickerProvider
               final padding = MediaQuery.of(context).padding;
               bool allowFallbackHole = false;
 
-              if (isStep4 && _targetMounted && _candidateRect != null && !_cutoutReady) {
+              if (isStep4 && targetMounted && _candidateRect != null && !cutoutReady) {
                 // Step 4: immediate override as soon as we have a candidate rect.
                 allowFallbackHole = true;
               } else if ((isStep5 || isStep6) &&
-                  _targetMounted &&
+                  targetMounted &&
                   _candidateRect != null &&
-                  !_cutoutReady &&
+                  !cutoutReady &&
                   // Require at least 2 frames with a visible candidate and no stable rect.
                   _framesSinceFirstCandidate >= 2) {
                 // Only allow fallback if the candidateRect looks like a real tile,
@@ -556,9 +538,9 @@ class _GuidedOverlayState extends State<GuidedOverlay> with SingleTickerProvider
                 }
               }
 
-              final bool barrierCutoutReady = _cutoutReady || allowFallbackHole;
+              final bool barrierCutoutReady = cutoutReady || allowFallbackHole;
               final Rect? barrierRect =
-                  _cutoutReady ? paintRect : (allowFallbackHole ? _candidateRect : null);
+                  cutoutReady ? paintRect : (allowFallbackHole ? _candidateRect : null);
 
               if (allowFallbackHole) {
                 final stepLabel = stepNumber ?? -1;

@@ -3,9 +3,9 @@ import '../app_catalog.dart';
 /// Track 5 – Communication (lessons 1–5)
 List<LessonDef> buildTrack5Lessons() {
   return [
-    LessonDef(
+    const LessonDef(
       title: 'Write Better Short Messages',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Turn a Rough Note Into a Clear Short Message',
           situation:
@@ -208,9 +208,9 @@ List<LessonDef> buildTrack5Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Write Clear Professional Requests',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Turn a Vague Request Into a Clear, Professional One',
           situation:
@@ -396,9 +396,9 @@ List<LessonDef> buildTrack5Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Write Messages With the Right Tone',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Rewrite a Message to Sound More Polite',
           situation:
@@ -589,9 +589,9 @@ List<LessonDef> buildTrack5Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Turn Raw Notes Into Professional Messages',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Turn Bullet Notes Into a Polished Message',
           situation:
@@ -775,9 +775,9 @@ List<LessonDef> buildTrack5Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Write Messages Tailored to Your Audience',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Rewrite a Message for a Senior Audience',
           situation:

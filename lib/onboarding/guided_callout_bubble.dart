@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../ui/adaptive/adaptive_dimensions.dart';
 import '../ui/adaptive/adaptive_insets.dart';
 import 'guided_overlay_geometry.dart';
 
@@ -75,12 +74,10 @@ class GuidedCalloutBubble extends StatelessWidget {
         break;
     }
 
-    // Ensure bubble doesn't go off-screen
-    if (top != null) {
-      final minTop = safeAreaInsets.top + spacing;
-      final maxTop = screenSize.height - _estimateBubbleHeight() - safeAreaInsets.bottom - spacing;
-      top = top.clamp(minTop, maxTop);
-    }
+    // Ensure bubble doesn't go off-screen (top is set in all placement cases)
+    final minTop = safeAreaInsets.top + spacing;
+    final maxTop = screenSize.height - _estimateBubbleHeight() - safeAreaInsets.bottom - spacing;
+    top = top.clamp(minTop, maxTop);
 
     return Positioned(
       top: top,

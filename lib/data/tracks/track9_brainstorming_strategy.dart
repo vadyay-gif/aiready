@@ -3,9 +3,9 @@ import '../app_catalog.dart';
 /// Track 9 – Brainstorming & Strategy (lessons 1–5)
 List<LessonDef> buildTrack9Lessons() {
   return [
-    LessonDef(
+    const LessonDef(
       title: 'Generate Ideas Quickly',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Generate ideas for improving a process',
           situation:
@@ -166,9 +166,9 @@ List<LessonDef> buildTrack9Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Explore Scenarios and Alternatives',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Explore alternative ways to reach a goal',
           situation:
@@ -325,9 +325,9 @@ List<LessonDef> buildTrack9Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Break Down Problems Step-by-Step',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Break a big project into smaller parts',
           situation:
@@ -486,9 +486,9 @@ List<LessonDef> buildTrack9Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Turn Thinking Into Frameworks',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Create a simple pros/cons list',
           situation:
@@ -643,9 +643,9 @@ List<LessonDef> buildTrack9Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Improve Ideas Through Iteration',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Refine an idea with constructive feedback',
           situation:

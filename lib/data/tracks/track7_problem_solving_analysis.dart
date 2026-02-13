@@ -3,9 +3,9 @@ import '../app_catalog.dart';
 /// Track 7 – Root-Cause Thinking (lessons 1–5)
 List<LessonDef> buildTrack7Lessons() {
   return [
-    LessonDef(
+    const LessonDef(
       title: 'Turn Problems Into Clear AI Questions',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Turn a messy problem description into a clear AI question',
           situation:
@@ -161,9 +161,9 @@ List<LessonDef> buildTrack7Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Turn Data Descriptions Into Questions AI Can Answer',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Turn a long data description into a simple analytical question',
           situation:
@@ -315,9 +315,9 @@ List<LessonDef> buildTrack7Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Turn Observations Into Root-Cause Questions',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Turn general observations into root-cause questions',
           situation:
@@ -466,9 +466,9 @@ List<LessonDef> buildTrack7Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Turn Processes Into Diagnostic Questions',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Turn process issues into targeted questions',
           situation: 'A workflow seems slow, but the description is vague.',
@@ -619,9 +619,9 @@ List<LessonDef> buildTrack7Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Turn Scattered Notes Into Analytical Questions',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Turn scattered notes into one analytical question',
           situation:

@@ -3,9 +3,9 @@ import '../app_catalog.dart';
 /// Track 4 – Presentations (lessons 1–5)
 List<LessonDef> buildTrack4Lessons() {
   return [
-    LessonDef(
+    const LessonDef(
       title: 'Create Clear Slide Outlines',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Turn a Topic Into a Simple Slide Outline',
           situation:
@@ -172,9 +172,9 @@ List<LessonDef> buildTrack4Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Turn Data Into Talking Points',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Turn Data Points Into Clear Talking Points',
           situation:
@@ -335,9 +335,9 @@ List<LessonDef> buildTrack4Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Write Effective Speaker Notes',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Explain a Slide in Clear Spoken Language',
           situation:
@@ -492,9 +492,9 @@ List<LessonDef> buildTrack4Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Improve Slide Clarity',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Rewrite a Busy Slide Into Key Bullets',
           situation:
@@ -647,9 +647,9 @@ List<LessonDef> buildTrack4Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Tailor Presentations to the Audience',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Adapt a Presentation for Executives',
           situation:

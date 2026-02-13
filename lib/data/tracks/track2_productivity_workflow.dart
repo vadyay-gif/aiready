@@ -3,9 +3,9 @@ import '../app_catalog.dart';
 /// Track 2 – Productivity & Workflow (lessons 1–5)
 List<LessonDef> buildTrack2Lessons() {
   return [
-    LessonDef(
+    const LessonDef(
       title: 'Summarise Quickly and Clearly',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Summarise Meeting Notes Into Key Points',
           situation:
@@ -170,9 +170,9 @@ List<LessonDef> buildTrack2Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Create Structure from Messy Input',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Turn Scattered Notes Into a Clear Checklist',
           situation:
@@ -339,9 +339,9 @@ List<LessonDef> buildTrack2Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Turn Information Into Schedules & Timelines',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Turn Notes Into a Simple Daily Schedule',
           situation:
@@ -508,9 +508,9 @@ List<LessonDef> buildTrack2Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Turn Information Into Structured Formats',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Turn Scattered Notes Into a Clean Table',
           situation:
@@ -675,9 +675,9 @@ List<LessonDef> buildTrack2Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Create Reusable Prompts for Daily Work',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Create a Reusable Prompt for Daily Summaries',
           situation:

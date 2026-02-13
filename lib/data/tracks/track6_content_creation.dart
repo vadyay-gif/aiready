@@ -3,9 +3,9 @@ import '../app_catalog.dart';
 /// Track 6 – Content Creation (lessons 1–5)
 List<LessonDef> buildTrack6Lessons() {
   return [
-    LessonDef(
+    const LessonDef(
       title: 'Rewrite Content for Tone and Style',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Rewrite for a More Professional Tone',
           situation:
@@ -161,9 +161,9 @@ List<LessonDef> buildTrack6Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Rewrite Content for Different Audiences',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Rewrite for a Senior Leadership Audience',
           situation:
@@ -312,9 +312,9 @@ List<LessonDef> buildTrack6Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Summarise Content Effectively',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Summarise an Email Into Key Points',
           situation: 'You need to extract only the essential points from a long email.',
@@ -462,9 +462,9 @@ List<LessonDef> buildTrack6Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Expand Content When Needed',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Expand a Short Note Into a Full Paragraph',
           situation:
@@ -613,9 +613,9 @@ List<LessonDef> buildTrack6Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Repurpose Content for New Formats',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Turn an Email Into a Short Announcement',
           situation:

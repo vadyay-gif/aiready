@@ -7,7 +7,6 @@ import '../widgets/guided_overlay.dart';
 import '../data/app_catalog.dart';
 import '../onboarding/guided_onboarding_navigation.dart';
 import '../onboarding/guided_onboarding_controller.dart';
-import '../onboarding/onboarding_debug_log.dart';
 import 'scenario_choice_screen.dart';
 
 class TrackScreen extends StatefulWidget {
@@ -101,13 +100,11 @@ class _TrackScreenState extends State<TrackScreen> {
                               GuidedOnboardingStep.lessonSelection &&
                           widget.trackIndex == 0;
                       final isGuidedTarget = isGuided && i == 0; // Highlight first lesson for visual guidance
-                      final allowTap = true; // Allow any lesson tap when guided (step advances for any selection)
-
                       return FutureBuilder<bool>(
                         future: progressService
                             .isLessonComplete('t${widget.trackIndex + 1}_l${i + 1}'),
                         builder: (context, snapshot) {
-                          final isCompleted = snapshot.data ?? false;
+                          final isCompleted = snapshot.data == true;
                           final progress = isCompleted ? 1.0 : null;
 
                           return LessonBar(
@@ -117,7 +114,6 @@ class _TrackScreenState extends State<TrackScreen> {
                             progress: progress,
                             icon: _getTrackIcon('t${widget.trackIndex + 1}'),
                             onTap: () {
-                              if (!allowTap) return;
                               // Step 5 -> Step 6: Advance step when ANY lesson is selected (if guided and on step 5)
                               if (GuidedOnboardingController.isActive &&
                                   GuidedOnboardingController.currentStep == GuidedOnboardingStep.lessonSelection) {

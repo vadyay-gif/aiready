@@ -1,6 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
-import '../ui/adaptive/breakpoints.dart';
 import '../ui/adaptive/adaptive_dimensions.dart';
 
 /// Placement options for callout bubbles.
@@ -120,6 +118,7 @@ class GuidedOverlayGeometryCalculator {
       // Fallback to below if no good option
       placement = CalloutPlacement.below;
     }
+    if (!context.mounted) return null;
 
     // Get callout max width
     final calloutMaxWidth = AdaptiveDimensions.calloutMaxWidth(context);
@@ -143,6 +142,7 @@ class GuidedOverlayGeometryCalculator {
   }) async {
     // Wait for next frame to ensure layout is complete
     await Future.delayed(const Duration(milliseconds: 100));
+    if (!context.mounted) return null;
     return calculateGeometry(
       targetKey: targetKey,
       secondTargetKey: secondTargetKey,

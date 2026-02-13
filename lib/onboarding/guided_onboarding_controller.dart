@@ -1,7 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'onboarding_state.dart';
-import '../services/guided_onboarding.dart' as OldService;
+import '../services/guided_onboarding.dart' as old_service;
 import 'onboarding_debug_log.dart';
 
 /// High-level steps for the hybrid onboarding walkthrough.
@@ -170,17 +170,17 @@ class GuidedOnboardingController {
     // TaskScreen/ScenarioScreen use GuidedOnboardingController, so they don't need old service.
     // This reduces risk of old service overriding controller state.
     try {
-      await OldService.GuidedOnboarding.initialize();
+      await old_service.GuidedOnboarding.initialize();
       // Don't sync intro steps to old service - they map to 'none' and screens use controller
       // Only sync when we reach trackSelection or later steps
       if (_step != GuidedOnboardingStep.intro1 && 
           _step != GuidedOnboardingStep.intro2 && 
           _step != GuidedOnboardingStep.intro3) {
-        if (!OldService.GuidedOnboarding.isActive) {
-          OldService.GuidedOnboarding.start();
+        if (!old_service.GuidedOnboarding.isActive) {
+          old_service.GuidedOnboarding.start();
         }
         final oldStep = _convertStepToOld(_step);
-        await OldService.GuidedOnboarding.goTo(oldStep);
+        await old_service.GuidedOnboarding.goTo(oldStep);
         if (kDebugMode) {
           debugPrint('[GUIDED_ONBOARDING] startFromIntro sync: $_step -> $oldStep (old service)');
         }
@@ -238,15 +238,15 @@ class GuidedOnboardingController {
     //
     // TODO: Migrate remaining screens to use GuidedOnboardingController, then remove this.
     try {
-      await OldService.GuidedOnboarding.initialize();
+      await old_service.GuidedOnboarding.initialize();
       // Ensure old service is active for goTo to work
-      if (!OldService.GuidedOnboarding.isActive) {
-        OldService.GuidedOnboarding.start();
+      if (!old_service.GuidedOnboarding.isActive) {
+        old_service.GuidedOnboarding.start();
       }
       final oldStep = _convertStepToOld(_step);
-      await OldService.GuidedOnboarding.goTo(oldStep);
+      await old_service.GuidedOnboarding.goTo(oldStep);
       if (kDebugMode) {
-        debugPrint('[GUIDED_ONBOARDING] start sync: $_step -> $oldStep (old service active=${OldService.GuidedOnboarding.isActive})');
+        debugPrint('[GUIDED_ONBOARDING] start sync: $_step -> $oldStep (old service active=${old_service.GuidedOnboarding.isActive})');
       }
     } catch (e) {
       if (kDebugMode) {
@@ -396,23 +396,23 @@ class GuidedOnboardingController {
           previous != GuidedOnboardingStep.intro1 && 
           previous != GuidedOnboardingStep.intro2 && 
           previous != GuidedOnboardingStep.intro3) {
-        await OldService.GuidedOnboarding.initialize();
-        if (!OldService.GuidedOnboarding.isActive && _active) {
-          OldService.GuidedOnboarding.start();
+        await old_service.GuidedOnboarding.initialize();
+        if (!old_service.GuidedOnboarding.isActive && _active) {
+          old_service.GuidedOnboarding.start();
         }
         final oldStep = _convertStepToOld(_step);
-        await OldService.GuidedOnboarding.goTo(oldStep);
+        await old_service.GuidedOnboarding.goTo(oldStep);
         if (kDebugMode && previous != _step) {
           debugPrint('[GUIDED_ONBOARDING] goNext sync: $_step -> $oldStep (old service)');
         }
       } else if (previous == GuidedOnboardingStep.intro3 && _step == GuidedOnboardingStep.trackSelection) {
         // Special case: intro3 -> trackSelection transition - sync old service for Step 4
-        await OldService.GuidedOnboarding.initialize();
-        if (!OldService.GuidedOnboarding.isActive) {
-          OldService.GuidedOnboarding.start();
+        await old_service.GuidedOnboarding.initialize();
+        if (!old_service.GuidedOnboarding.isActive) {
+          old_service.GuidedOnboarding.start();
         }
         final oldStep = _convertStepToOld(_step);
-        await OldService.GuidedOnboarding.goTo(oldStep);
+        await old_service.GuidedOnboarding.goTo(oldStep);
         if (kDebugMode) {
           debugPrint('[GUIDED_ONBOARDING] goNext sync: intro3->trackSelection -> $oldStep (old service)');
         }
@@ -533,12 +533,12 @@ class GuidedOnboardingController {
       if (step != GuidedOnboardingStep.intro1 && 
           step != GuidedOnboardingStep.intro2 && 
           step != GuidedOnboardingStep.intro3) {
-        await OldService.GuidedOnboarding.initialize();
-        if (!OldService.GuidedOnboarding.isActive && _active) {
-          OldService.GuidedOnboarding.start();
+        await old_service.GuidedOnboarding.initialize();
+        if (!old_service.GuidedOnboarding.isActive && _active) {
+          old_service.GuidedOnboarding.start();
         }
         final oldStep = _convertStepToOld(step);
-        await OldService.GuidedOnboarding.goTo(oldStep);
+        await old_service.GuidedOnboarding.goTo(oldStep);
         if (kDebugMode) {
           debugPrint('[GUIDED_ONBOARDING] goTo sync: $step -> $oldStep (old service)');
         }
@@ -829,7 +829,7 @@ class GuidedOnboardingController {
     await _persistState();
     try {
       final oldStep = _convertStepToOld(_step);
-      await OldService.GuidedOnboarding.goTo(oldStep);
+      await old_service.GuidedOnboarding.goTo(oldStep);
     } catch (e) {
       if (kDebugMode) {
         debugPrint(
@@ -851,38 +851,38 @@ class GuidedOnboardingController {
   }
   
   /// Convert our GuidedOnboardingStep enum to the old service's enum.
-  static OldService.GuidedOnboardingStep _convertStepToOld(GuidedOnboardingStep step) {
+  static old_service.GuidedOnboardingStep _convertStepToOld(GuidedOnboardingStep step) {
     switch (step) {
       case GuidedOnboardingStep.none:
-        return OldService.GuidedOnboardingStep.none;
+        return old_service.GuidedOnboardingStep.none;
       case GuidedOnboardingStep.intro1:
       case GuidedOnboardingStep.intro2:
       case GuidedOnboardingStep.intro3:
         // Old service doesn't have intro steps, map to none
-        return OldService.GuidedOnboardingStep.none;
+        return old_service.GuidedOnboardingStep.none;
       case GuidedOnboardingStep.trackSelection:
-        return OldService.GuidedOnboardingStep.trackSelection;
+        return old_service.GuidedOnboardingStep.trackSelection;
       case GuidedOnboardingStep.lessonSelection:
-        return OldService.GuidedOnboardingStep.lessonSelection;
+        return old_service.GuidedOnboardingStep.lessonSelection;
       case GuidedOnboardingStep.scenarioSelection:
-        return OldService.GuidedOnboardingStep.scenarioSelection;
+        return old_service.GuidedOnboardingStep.scenarioSelection;
       case GuidedOnboardingStep.scenarioOverview:
-        return OldService.GuidedOnboardingStep.scenarioOverview;
+        return old_service.GuidedOnboardingStep.scenarioOverview;
       case GuidedOnboardingStep.taskIntro:
-        return OldService.GuidedOnboardingStep.taskIntro;
+        return old_service.GuidedOnboardingStep.taskIntro;
       case GuidedOnboardingStep.taskGuidance:
-        return OldService.GuidedOnboardingStep.taskGuidance;
+        return old_service.GuidedOnboardingStep.taskGuidance;
       case GuidedOnboardingStep.taskFeedback:
         // Map to taskGuidance for old service compatibility
-        return OldService.GuidedOnboardingStep.taskGuidance;
+        return old_service.GuidedOnboardingStep.taskGuidance;
       case GuidedOnboardingStep.resultsTakeaway:
-        return OldService.GuidedOnboardingStep.resultsTakeaway;
+        return old_service.GuidedOnboardingStep.resultsTakeaway;
       case GuidedOnboardingStep.infoSettings:
-        return OldService.GuidedOnboardingStep.infoSettings;
+        return old_service.GuidedOnboardingStep.infoSettings;
       case GuidedOnboardingStep.repeatOnboarding:
-        return OldService.GuidedOnboardingStep.infoSettings; // Old service has no repeatOnboarding
+        return old_service.GuidedOnboardingStep.infoSettings; // Old service has no repeatOnboarding
       case GuidedOnboardingStep.completed:
-        return OldService.GuidedOnboardingStep.completed;
+        return old_service.GuidedOnboardingStep.completed;
     }
   }
 

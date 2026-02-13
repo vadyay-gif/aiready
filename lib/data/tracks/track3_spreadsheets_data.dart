@@ -3,9 +3,9 @@ import '../app_catalog.dart';
 /// Track 3 – Spreadsheets & Data (lessons 1–5)
 List<LessonDef> buildTrack3Lessons() {
   return [
-    LessonDef(
+    const LessonDef(
       title: 'Create Quick Spreadsheet Summaries',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Ask AI to Build a Summary Table From Raw Data',
           situation:
@@ -147,9 +147,9 @@ List<LessonDef> buildTrack3Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Find Top Values in Your Data',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Ask AI to Identify the Top Values in a Column',
           situation:
@@ -299,9 +299,9 @@ List<LessonDef> buildTrack3Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Analyze Data for Insights',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Turn Spreadsheet Numbers Into Clear Observations',
           situation:
@@ -455,9 +455,9 @@ List<LessonDef> buildTrack3Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Turn Data Into Charts',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Ask AI to Recommend the Best Chart Type',
           situation:
@@ -612,9 +612,9 @@ List<LessonDef> buildTrack3Lessons() {
         ),
       ],
     ),
-    LessonDef(
+    const LessonDef(
       title: 'Automate Spreadsheet Tasks',
-      scenarios: const [
+      scenarios: [
         ScenarioDef(
           title: 'Create a Reusable Prompt for Cleaning Data',
           situation:

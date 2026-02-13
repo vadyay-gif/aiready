@@ -109,7 +109,7 @@ class _AppInitializerState extends State<_AppInitializer> {
       if (stepNumber == 15) {
         // Step 15: ScenarioCompleteScreen
         OnboardingDebugLog.log('app_init', 'resume routing: step=15 -> ScenarioCompleteScreen');
-        targetScreen = ScenarioCompleteScreen(
+        targetScreen = const ScenarioCompleteScreen(
           trackIndex: 0,
           lessonIndex: 0,
           scenarioIndex: 0,

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/foundation.dart';
-import 'guided_overlay_geometry.dart';
 import 'onboarding_debug_log.dart';
 
 /// Debug toggle for onboarding logs and diagnostics.
