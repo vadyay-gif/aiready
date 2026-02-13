@@ -25,8 +25,8 @@ class LessonBar extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(18),
         child: Container(
-          height: 84,
-          padding: const EdgeInsets.all(16),
+          constraints: const BoxConstraints(minHeight: 96),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           child: Row(
             children: [
               Icon(icon ?? Icons.menu_book_outlined),
@@ -38,8 +38,9 @@ class LessonBar extends StatelessWidget {
                   children: [
                     Text(
                       title,
-                      maxLines: 1,
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
+                      softWrap: true,
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
                             fontWeight: FontWeight.w600,
                           ),

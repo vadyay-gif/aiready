@@ -43,16 +43,51 @@ class TrackTile extends StatelessWidget {
                   height: 44,
                   child: FittedBox(fit: BoxFit.scaleDown, child: icon)),
               const SizedBox(height: 12),
-              Text(title,
-                  style: titleStyle,
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis),
+              _buildTitle(title, titleStyle),
               const Spacer(),
             ],
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildTitle(String title, TextStyle? titleStyle) {
+    if (title.contains('\n')) {
+      final parts = title.split('\n');
+      if (parts.length >= 2) {
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              parts[0],
+              style: titleStyle,
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 2),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                parts[1],
+                style: titleStyle,
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.clip,
+                softWrap: false,
+              ),
+            ),
+          ],
+        );
+      }
+    }
+    return Text(
+      title,
+      style: titleStyle,
+      textAlign: TextAlign.center,
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
     );
   }
 }

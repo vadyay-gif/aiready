@@ -1,11 +1,12 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../data/app_catalog.dart';
-import '../onboarding/guided_onboarding_controller.dart';
 import '../widgets/scenario_option_tile.dart';
 import '../widgets/guided_overlay.dart';
-import 'scenario_screen.dart';
 import '../onboarding/guided_onboarding_navigation.dart';
+import '../onboarding/guided_onboarding_controller.dart';
+import '../onboarding/onboarding_debug_log.dart';
+import 'scenario_screen.dart';
 
 class ScenarioChoiceScreen extends StatefulWidget {
   final int trackIndex;
@@ -42,6 +43,7 @@ class _ScenarioChoiceScreenState extends State<ScenarioChoiceScreen> {
         GuidedOnboardingController.currentStep == GuidedOnboardingStep.scenarioSelection &&
         widget.trackIndex == 0 &&
         widget.lessonIndex == 0; // Only for Track 1, Lesson 1
+    final stepNumber = GuidedOnboardingController.getCurrentStepNumber();
 
     if (kDebugMode) {
       debugPrint('Nav: Track -> ScenarioChoice | ${trackDef.title} / ${lessonDef.title}');
@@ -86,19 +88,33 @@ class _ScenarioChoiceScreenState extends State<ScenarioChoiceScreen> {
                                 const SizedBox(height: 12),
                             itemBuilder: (context, index) {
                               final scenario = scenarios[index];
-                              final isGuidedTarget = isGuided && index == 0;
-                              final allowTap = !isGuided || isGuidedTarget;
+                              final isGuidedTarget = isGuided && index == 0; // Highlight first scenario for visual guidance
+                              final allowTap = true; // Allow any scenario tap when guided (step advances for any selection)
 
-                              final scenarioTile = ScenarioOptionTile(
+                              return ScenarioOptionTile(
+                                key: isGuidedTarget ? _scenario1Key : null,
                                 title: scenario.title,
                                 subtitle: scenario.situation.split('.').first,
                                 icon: Icons.assignment_outlined,
-                                onTap: () async {
+                                onTap: () {
                                   if (!allowTap) return;
-                                  // CRITICAL: Advance onboarding BEFORE navigation so ScenarioScreen sees step 7
-                                  if (isGuided && index == 0) {
-                                    await GuidedOnboardingController.next();
-                                    await Future.microtask(() {});
+                                  // Step 6 -> Step 7: Advance step when ANY scenario is selected (if guided and on step 6)
+                                  if (GuidedOnboardingController.isActive &&
+                                      GuidedOnboardingController.currentStep == GuidedOnboardingStep.scenarioSelection) {
+                                    final beforeStep = GuidedOnboardingController.getCurrentStepNumber();
+                                    final beforeEnum = GuidedOnboardingController.currentStep;
+                                    if (kDebugMode) {
+                                      debugPrint('[SCENARIO_CHOICE] Scenario tap (index=$index): beforeStep=$beforeStep ($beforeEnum)');
+                                    }
+                                    // Advance step before navigation (guard: only if still on scenarioSelection to prevent double-advance)
+                                    if (GuidedOnboardingController.currentStep == GuidedOnboardingStep.scenarioSelection) {
+                                      GuidedOnboardingController.goNext();
+                                      final afterStep = GuidedOnboardingController.getCurrentStepNumber();
+                                      final afterEnum = GuidedOnboardingController.currentStep;
+                                      if (kDebugMode) {
+                                        debugPrint('[SCENARIO_CHOICE] Scenario tap (index=$index): afterStep=$afterStep ($afterEnum)');
+                                      }
+                                    }
                                   }
                                   Navigator.push(
                                     context,
@@ -112,18 +128,6 @@ class _ScenarioChoiceScreenState extends State<ScenarioChoiceScreen> {
                                   );
                                 },
                               );
-
-                              // Key must be on the tappable ScenarioOptionTile surface (step 6 target)
-                              if (isGuidedTarget) {
-                                return ScenarioOptionTile(
-                                  key: _scenario1Key,
-                                  title: scenario.title,
-                                  subtitle: scenario.situation.split('.').first,
-                                  icon: Icons.assignment_outlined,
-                                  onTap: scenarioTile.onTap,
-                                );
-                              }
-                              return scenarioTile;
                             },
                           ),
                   ),
@@ -131,22 +135,15 @@ class _ScenarioChoiceScreenState extends State<ScenarioChoiceScreen> {
               ),
             ),
           ),
-          if (isGuided)
+          if (isGuided && stepNumber == 6)
             GuidedOverlay(
-              text:
-                  "Scenarios are real work situations\nwhere AI can help.",
+              text: "Scenarios are real work situations\nwhere AI can help.",
               highlightedKey: _scenario1Key,
               scrollController: _scrollController,
-              currentStep: GuidedOnboardingController.getCurrentStepNumber(),
-              onPreviousStep: () async {
-                await handleGuidedPrevious(context);
-              },
-              onSkip: () async {
-                await GuidedOnboardingController.skip();
-                if (context.mounted) {
-                  Navigator.of(context).popUntil((route) => route.isFirst);
-                }
-              },
+              currentStep: stepNumber,
+              onPreviousStep: null,
+              onSkip: () => handleGuidedSkip(context),
+              showContinueButton: false, // Step 6 is tap-required
             ),
         ],
       ),

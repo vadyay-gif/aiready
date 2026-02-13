@@ -5,8 +5,9 @@ import '../services/progress_service.dart';
 import '../widgets/lesson_bar.dart';
 import '../widgets/guided_overlay.dart';
 import '../data/app_catalog.dart';
-import '../onboarding/guided_onboarding_controller.dart';
 import '../onboarding/guided_onboarding_navigation.dart';
+import '../onboarding/guided_onboarding_controller.dart';
+import '../onboarding/onboarding_debug_log.dart';
 import 'scenario_choice_screen.dart';
 
 class TrackScreen extends StatefulWidget {
@@ -41,6 +42,7 @@ class _TrackScreenState extends State<TrackScreen> {
     final isGuided = GuidedOnboardingController.isActive &&
         GuidedOnboardingController.currentStep == GuidedOnboardingStep.lessonSelection &&
         widget.trackIndex == 0; // Only for Track 1
+    final stepNumber = GuidedOnboardingController.getCurrentStepNumber();
 
     return MediaQuery(
       data: media,
@@ -51,21 +53,15 @@ class _TrackScreenState extends State<TrackScreen> {
         body: Stack(
           children: [
             _buildHorizontalBarLayout(context, lessons, progressService),
-            if (isGuided)
+            if (isGuided && stepNumber == 5)
               GuidedOverlay(
                 text: "Lessons focus on one specific skill.\nChoose the first lesson.",
                 highlightedKey: _lesson1Key,
                 scrollController: _scrollController,
-                currentStep: GuidedOnboardingController.getCurrentStepNumber(),
-                onPreviousStep: () async {
-                  await handleGuidedPrevious(context);
-                },
-                onSkip: () async {
-                  await GuidedOnboardingController.skip();
-                  if (context.mounted) {
-                    Navigator.of(context).popUntil((route) => route.isFirst);
-                  }
-                },
+                currentStep: stepNumber,
+                onPreviousStep: null,
+                onSkip: () => handleGuidedSkip(context),
+                showContinueButton: false, // Step 5 is tap-required
               ),
           ],
         ),
@@ -104,8 +100,8 @@ class _TrackScreenState extends State<TrackScreen> {
                           GuidedOnboardingController.currentStep ==
                               GuidedOnboardingStep.lessonSelection &&
                           widget.trackIndex == 0;
-                      final isGuidedTarget = isGuided && i == 0;
-                      final allowTap = !isGuided || isGuidedTarget;
+                      final isGuidedTarget = isGuided && i == 0; // Highlight first lesson for visual guidance
+                      final allowTap = true; // Allow any lesson tap when guided (step advances for any selection)
 
                       return FutureBuilder<bool>(
                         future: progressService
@@ -114,19 +110,31 @@ class _TrackScreenState extends State<TrackScreen> {
                           final isCompleted = snapshot.data ?? false;
                           final progress = isCompleted ? 1.0 : null;
 
-                          // Key must be on the tappable LessonBar surface (step 5 target)
                           return LessonBar(
                             key: isGuidedTarget ? _lesson1Key : null,
                             title: lesson.title,
                             subtitle: null, // subtitles are hidden in LessonBar
                             progress: progress,
                             icon: _getTrackIcon('t${widget.trackIndex + 1}'),
-                            onTap: () async {
+                            onTap: () {
                               if (!allowTap) return;
-                              // CRITICAL: Advance onboarding BEFORE navigation so ScenarioChoiceScreen sees step 6
-                              if (isGuided && i == 0) {
-                                await GuidedOnboardingController.next();
-                                await Future.microtask(() {});
+                              // Step 5 -> Step 6: Advance step when ANY lesson is selected (if guided and on step 5)
+                              if (GuidedOnboardingController.isActive &&
+                                  GuidedOnboardingController.currentStep == GuidedOnboardingStep.lessonSelection) {
+                                final beforeStep = GuidedOnboardingController.getCurrentStepNumber();
+                                final beforeEnum = GuidedOnboardingController.currentStep;
+                                if (kDebugMode) {
+                                  debugPrint('[TRACK_SCREEN] Lesson tap (index=$i): beforeStep=$beforeStep ($beforeEnum)');
+                                }
+                                // Advance step before navigation (guard: only if still on lessonSelection to prevent double-advance)
+                                if (GuidedOnboardingController.currentStep == GuidedOnboardingStep.lessonSelection) {
+                                  GuidedOnboardingController.goNext();
+                                  final afterStep = GuidedOnboardingController.getCurrentStepNumber();
+                                  final afterEnum = GuidedOnboardingController.currentStep;
+                                  if (kDebugMode) {
+                                    debugPrint('[TRACK_SCREEN] Lesson tap (index=$i): afterStep=$afterStep ($afterEnum)');
+                                  }
+                                }
                               }
                               _openLessonDetail(context, i);
                             },

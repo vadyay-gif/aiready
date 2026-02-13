@@ -11,6 +11,8 @@ import '../theme/app_colors.dart';
 import '../data/app_catalog.dart';
 import '../main.dart';
 import '../onboarding/guided_onboarding_controller.dart';
+import '../onboarding/onboarding_debug_log.dart';
+import '../onboarding/guided_onboarding_navigation.dart';
 import 'track_screen.dart';
 import 'scenario_screen.dart';
 import 'settings_page.dart';
@@ -29,6 +31,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   final GlobalKey _settingsKey = GlobalKey();
   final ScrollController _scrollController = ScrollController();
   bool _step4HighlightReady = false;
+  bool _didAutoScrollForStep16 = false;
+  int? _lastLoggedStep;
+  bool _wasOnboardingActive = false;
 
   @override
   void initState() {
@@ -93,6 +98,18 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     } catch (_) { /* swallow to avoid any crash */ }
   }
 
+  void _scrollToTopNextFrame() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (_scrollController.hasClients) {
+        _scrollController.jumpTo(0.0);
+        if (kDebugMode) {
+          debugPrint('[HOME] onboarding finished -> scrollToTop');
+        }
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final store = context.watch<ProgressStore>();
@@ -128,6 +145,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     final bool isGuided = GuidedOnboardingController.isActive;
     final currentStep = GuidedOnboardingController.currentStep;
     final stepNumber = GuidedOnboardingController.getCurrentStepNumber();
+    
+    // Detect when onboarding completes (transitions from active to inactive)
+    if (_wasOnboardingActive && !isGuided) {
+      _scrollToTopNextFrame();
+    }
+    _wasOnboardingActive = isGuided;
     
     // Determine if GuidedOverlay should be rendered for steps that belong on HomeScreen
     // Step 4 (trackSelection) and Step 15 (infoSettings) are shown on HomeScreen
@@ -194,7 +217,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                           ),
                           const SizedBox(height: 6),
                           Text(
-                            'Practical AI Skills in 30 Days',
+                            'Practical AI Skills in 60 Days',
                             style: Theme.of(context)
                                 .textTheme
                                 .titleSmall
@@ -318,12 +341,15 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                               highlight: isGuidedTarget,
                               onTap: () async {
                                 // Step 16: Info & Settings tile tap-required in guided mode.
+                                // goNext() advances infoSettings -> repeatOnboarding (step 17); then push SettingsPage.
                                 if (isGuided &&
                                     GuidedOnboardingController.currentStep ==
                                         GuidedOnboardingStep.infoSettings) {
-                                  // Advance to settings-page step (17) BEFORE navigation.
-                                  await GuidedOnboardingController.next();
-                                  await Future.microtask(() {});
+                                  OnboardingDebugLog.log(
+                                    'home_screen',
+                                    'Step16 Settings tile tapped -> push SettingsPage + goNext (expect stepNumber=17)',
+                                  );
+                                  await GuidedOnboardingController.goNext();
                                 }
                                 Navigator.push(
                                   context,
@@ -389,45 +415,81 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                       _step4HighlightReady = ready;
                     });
                   },
-                  onPreviousStep: () async {
-                    // Step 4 Previous: navigate to intro slide 3
-                    Navigator.pushReplacement(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const OnboardingScreen(initialPage: 2),
-                      ),
-                    );
-                  },
-                  onSkip: () async {
-                    // Step 4 Skip Onboarding
-                    await GuidedOnboardingController.skip();
-                    if (context.mounted) {
-                      Navigator.of(context).popUntil((route) => route.isFirst);
-                    }
-                  },
+                  onPreviousStep: null,
+                  onSkip: () => handleGuidedSkip(context),
                   // Step 4 is TAP-REQUIRED: no Next button (UIActionHint supplies tap instruction).
                   showContinueButton: false,
                 )
-              else if (shouldShowOverlay && currentStep == GuidedOnboardingStep.infoSettings)
-                GuidedOverlay(
-                  text:
-                      'Here you can learn more about AI Ready\nand adjust basic settings.',
-                  highlightedKey: _settingsKey,
-                  scrollController: _scrollController,
-                  currentStep: stepNumber,
-                  onPreviousStep: () async {
-                    await GuidedOnboardingController.goBack();
-                  },
-                  onSkip: () async {
-                    // Step 15 Skip Onboarding
-                    await GuidedOnboardingController.skip();
-                    if (context.mounted) {
-                      Navigator.of(context).popUntil((route) => route.isFirst);
+              else
+              // Step 16 overlay (notifier-driven rebuild)
+              ValueListenableBuilder<GuidedOnboardingStep>(
+                valueListenable: GuidedOnboardingController.stepNotifier,
+                builder: (context, currentStepEnum, _) {
+                  final int? liveStepNumber =
+                      GuidedOnboardingController.getCurrentStepNumber();
+                  final bool liveGuided = GuidedOnboardingController.isActive;
+                  final bool isStep16 = liveGuided &&
+                      currentStepEnum == GuidedOnboardingStep.infoSettings &&
+                      liveStepNumber == 16;
+
+                  if (!isStep16) {
+                    if (_didAutoScrollForStep16) {
+                      _didAutoScrollForStep16 = false; // Reset flag immediately to prevent repeated scheduling
+                      // No setState needed - flag is only used for one-time scroll behavior
                     }
-                  },
-                  // Step 15 is TAP-REQUIRED: NO Next button, show helper hint
-                  showContinueButton: false,
-                ),
+                    return const SizedBox.shrink();
+                  }
+
+                  // Only log on step transitions to prevent spam
+                  if (liveStepNumber != _lastLoggedStep) {
+                    OnboardingDebugLog.log(
+                      'home_screen',
+                      'render overlay for step=$liveStepNumber enum=$currentStepEnum',
+                    );
+                    _lastLoggedStep = liveStepNumber;
+                  }
+
+                  // Auto-scroll to Settings tile on Step 16 entry (once per entry)
+                  if (!_didAutoScrollForStep16) {
+                    final ctx = _settingsKey.currentContext;
+                    OnboardingDebugLog.log(
+                      'home_screen',
+                      'step16 settingsTileContextNull=${ctx == null}',
+                    );
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (!mounted) return;
+                      final c = _settingsKey.currentContext;
+                      if (c != null) {
+                        final s = Scrollable.maybeOf(c);
+                        if (s != null) {
+                          Scrollable.ensureVisible(
+                            c,
+                            alignment: 0.2,
+                            duration: const Duration(milliseconds: 250),
+                          );
+                          if (mounted) setState(() => _didAutoScrollForStep16 = true);
+                          OnboardingDebugLog.log(
+                            'home_screen',
+                            'step16 autoScroll invoked mounted=true didScroll=true',
+                          );
+                        }
+                      }
+                    });
+                  }
+
+                  return GuidedOverlay(
+                    text:
+                        'Here you can learn more about AI Ready\nand adjust basic settings.',
+                    highlightedKey: _settingsKey,
+                    scrollController: _scrollController,
+                    currentStep: liveStepNumber,
+                    onPreviousStep: null,
+                    onSkip: () => handleGuidedSkip(context),
+                    // Step 16 is TAP-REQUIRED: NO Next button
+                    showContinueButton: false,
+                  );
+                },
+              ),
             ],
           ),
         ),

@@ -4,15 +4,27 @@ import '../onboarding/guided_overlay_geometry.dart';
 import '../onboarding/guided_onboarding_controller.dart';
 import '../onboarding/guided_overlay_barrier.dart';
 import '../onboarding/mobile_guided_bottom_sheet.dart';
-import '../ui/adaptive/adaptive_dimensions.dart';
-import '../ui/platform/ui_track.dart';
+import '../onboarding/onboarding_debug_log.dart';
 
 /// Debug toggle for onboarding logs and diagnostics.
-/// Set to true for verification builds; false for release.
 const bool kOnboardingDebug = true;
 
-/// Guided onboarding overlay widget for steps 4-16.
-/// Supports both simple mode (legacy) and advanced mode (steps 4-16 with bottom sheet).
+/// Pixel threshold for detecting rect changes (1.0-2.0px as specified).
+const double _kRectChangeThreshold = 1.5;
+
+/// Helper class for animating Rect values.
+class _RectTween extends Tween<Rect?> {
+  _RectTween({Rect? begin, Rect? end}) : super(begin: begin, end: end);
+
+  @override
+  Rect? lerp(double t) {
+    if (begin == null || end == null) return end;
+    return Rect.lerp(begin, end, t);
+  }
+}
+
+/// Guided onboarding overlay widget for steps 4-17.
+/// Uses MobileGuidedBottomSheet for controls and GuidedOverlayBarrier for hit-testing.
 class GuidedOverlay extends StatefulWidget {
   const GuidedOverlay({
     super.key,
@@ -26,12 +38,13 @@ class GuidedOverlay extends StatefulWidget {
     this.onContinue,
     this.scrollController,
     this.showDimmedOverlay = true,
-    // Advanced mode parameters (for steps 4-16)
+    // Advanced mode parameters (for steps 4-17)
     this.currentStep,
     this.onPreviousStep,
     this.onSkip,
     this.child,
     this.onHighlightReadyChanged,
+    this.bottomSheetKey,
   });
 
   final String text;
@@ -50,697 +63,533 @@ class GuidedOverlay extends StatefulWidget {
   final VoidCallback? onSkip;
   final Widget? child;
   // Optional callback to notify when the current highlight rect becomes ready/unready.
-  // Used by hosting screens (e.g., HomeScreen step 4) to hard-lock taps until
-  // the overlay geometry is fully measured.
   final ValueChanged<bool>? onHighlightReadyChanged;
+  // Optional key for bottom sheet (for scroll positioning)
+  final GlobalKey? bottomSheetKey;
 
   @override
   State<GuidedOverlay> createState() => _GuidedOverlayState();
 }
 
-class _GuidedOverlayState extends State<GuidedOverlay> {
-  Rect? _targetRect;
-  Rect? _secondTargetRect;
-  bool _isSyncing = false;
-  int _syncToken = 0;
+class _GuidedOverlayState extends State<GuidedOverlay> with SingleTickerProviderStateMixin {
+  // Rect stability tracking
+  Rect? _lastMeasuredRect;
+  Rect? _candidateRect;
+  Rect? _stableRect;
+  int _stableFrames = 0;
+  bool _hasEverLockedCutoutForThisStep = false;
+  String? _lastNoCutoutReason;
+  String? _lastResetReason;
+  double? _lastRectDelta;
+  int _resetCount = 0;
+  int _pendingMeasureFrames = 0;
+  int _framesSinceFirstCandidate = 0;
+  static const int _kMaxStabilityFrames = 6;
+  
+  // Animation for smooth cutout transitions
+  late AnimationController _rectAnimController;
+  Animation<Rect?>? _rectAnimation;
+  Rect? _paintRect;
+  
   double? _bottomSheetHeight;
-  final GlobalKey _bottomSheetKey = GlobalKey();
-  // Paint surface key for the dimmed overlay CustomPaint (single source of truth for coordinate space)
+  final GlobalKey _bottomSheetKey =
+      GlobalKey(debugLabel: 'guidedBottomSheet');
   final GlobalKey _paintSurfaceKey = GlobalKey();
-  bool _measurementScheduled = false; // Guard against measurement loops
-  bool _lastHighlightReady = false;
-  int _retryAttempts = 0;
-  static const int _maxRetryAttempts = 10; // Guard against infinite retry loops
-
-  // Step 4 readiness gating – limit how many frames we wait for HomeScreen/target/paint
-  // to be fully laid out before attempting measurement.
-  int _step4ReadinessAttempts = 0;
-  static const int _maxStep4ReadinessAttempts = 20;
-  // Track last logged step number for debug logging (only log when step changes)
-  int? _lastLoggedStepNumber;
-
-  // Determine if we're in advanced mode (steps 4-16)
-  bool get _isAdvancedMode => widget.currentStep != null && widget.currentStep! >= 4 && widget.currentStep! <= 16;
-  bool get _shouldUseBottomSheet => _isAdvancedMode && !kIsWeb && MediaQuery.of(context).size.width < 900;
+  
+  bool _measurementScheduled = false;
+  
+  // Track step/target identity for reset detection
+  GlobalKey? _lastHighlightedKey;
+  GlobalKey? _lastSecondHighlightedKey;
+  int? _lastCurrentStep;
 
   @override
   void initState() {
     super.initState();
-    if (_isAdvancedMode) {
-      widget.scrollController?.addListener(_onScroll);
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _scheduleMeasurement();
-        _syncToStep();
-      });
-    }
-  }
-
-  void _onScroll() {
-    // Recompute rects when scroll changes (for steps 8-10 alignment)
-    if (_isAdvancedMode && mounted) {
-      _recomputeRects();
-    }
+    widget.scrollController?.addListener(_onScroll);
+    
+    // Track initial step/target identity
+    _lastHighlightedKey = widget.highlightedKey;
+    _lastSecondHighlightedKey = widget.secondHighlightedKey;
+    _lastCurrentStep = widget.currentStep;
+    
+    // Initialize animation controller
+    _rectAnimController = AnimationController(
+      duration: const Duration(milliseconds: 200),
+      vsync: this,
+    );
+    
+    _rectAnimController.addListener(() {
+      if (_rectAnimation != null) {
+        setState(() {
+          _paintRect = _rectAnimation!.value;
+        });
+      }
+    });
+    
+    _measureRects();
   }
 
   @override
   void didUpdateWidget(GuidedOverlay oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // Update scroll listener if controller changed
     if (oldWidget.scrollController != widget.scrollController) {
       oldWidget.scrollController?.removeListener(_onScroll);
       widget.scrollController?.addListener(_onScroll);
     }
-    // Freeze fix: only skip sync if step didn't change
-    if (_isAdvancedMode && oldWidget.currentStep != widget.currentStep) {
-      // If we are leaving step 4, clear highlight readiness so hosts can lock taps again.
-      if (oldWidget.currentStep == 4 && widget.currentStep != 4) {
-        _updateHighlightReady(false);
-      }
-      // Step changed - re-measure bottom sheet (button visibility may change height) and resync
-      _retryAttempts = 0; // Reset retry counter on step change
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _scheduleMeasurement();
-        _syncToStep();
-      });
-    } else if (_isAdvancedMode && 
-               (oldWidget.highlightedKey != widget.highlightedKey ||
-                oldWidget.secondHighlightedKey != widget.secondHighlightedKey)) {
-      // Keys changed - recompute rects
-      _recomputeRects();
-    }
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    // Handle orientation changes: re-measure bottom sheet height and re-sync when metrics change
-    if (_isAdvancedMode) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _scheduleMeasurement();
-        _syncToStep();
-      });
-    }
-  }
-  
-  /// Measure the actual rendered height of the bottom sheet.
-  /// Called after layout to get accurate height for barrier positioning.
-  /// Debounced: only setState if height changed by >1px to prevent loops.
-  /// Event-driven: triggers position verification when height is first measured or changes.
-  void _measureBottomSheetHeight() {
-    if (!mounted) return;
-    _measurementScheduled = false; // Clear flag when measurement runs
     
-    final box = _bottomSheetKey.currentContext?.findRenderObject() as RenderBox?;
-    if (box != null && box.hasSize) {
-      final measuredHeight = box.size.height;
-      final bool wasNull = _bottomSheetHeight == null;
-      // Only update if height changed by more than 1 logical pixel
-      if (_bottomSheetHeight == null || 
-          (measuredHeight - _bottomSheetHeight!).abs() > 1.0) {
-        if (kOnboardingDebug && kDebugMode) {
-          debugPrint('[GUIDED_OVERLAY] Measured bottom sheet height: $measuredHeight (was: $_bottomSheetHeight)');
-        }
-        final double? oldHeight = _bottomSheetHeight;
-        setState(() {
-          _bottomSheetHeight = measuredHeight;
-        });
-        
-        // Event-driven: trigger position verification when height is measured/changed
-        // Only for steps that need it (10, 13, 14) and only once per measurement
-        if (wasNull || (oldHeight != null && (measuredHeight - oldHeight).abs() > 1.0)) {
-          final stepNumber = widget.currentStep ?? GuidedOnboardingController.getCurrentStepNumber();
-          if (stepNumber != null && (stepNumber == 10 || stepNumber == 13 || stepNumber == 14)) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted) {
-                _verifyTargetAboveBottomSheet();
-              }
-            });
-          }
-        }
-      }
-    }
-    // If not yet laid out, don't set estimated height - use 0.0 fallback in build()
-  }
-  
-  /// Schedule a bottom sheet height measurement (debounced).
-  void _scheduleMeasurement() {
-    if (!_measurementScheduled && mounted) {
-      _measurementScheduled = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) => _measureBottomSheetHeight());
-    }
-  }
-
-  Future<void> _syncToStep() async {
-    final currentToken = ++_syncToken;
-    _isSyncing = true;
-    _targetRect = null; // Clear rect during sync
+    // Detect step/target change by comparing key identity and currentStep
+    final stepChanged = oldWidget.highlightedKey != widget.highlightedKey ||
+        oldWidget.secondHighlightedKey != widget.secondHighlightedKey ||
+        oldWidget.currentStep != widget.currentStep;
     
-    if (!mounted || currentToken != _syncToken) return;
-    
-    // Wait for layout to settle (all steps use same timing)
-    final stepNumber = widget.currentStep ?? 4;
-    await WidgetsBinding.instance.endOfFrame;
-    await WidgetsBinding.instance.endOfFrame;
-    
-    // For step 4 (Grid layout), wait additional frame if key not ready
-    if (stepNumber == 4) {
-      final targetKey = widget.highlightedKey ?? widget.secondHighlightedKey;
-      if (targetKey?.currentContext == null) {
-        await WidgetsBinding.instance.endOfFrame;
-      }
-    }
-    
-    if (!mounted || currentToken != _syncToken) return;
-    
-    // Ensure target visible
-    await _ensureTargetVisible();
-    
-    if (!mounted || currentToken != _syncToken) return;
-    
-    // Verify target above bottom sheet for steps 7-10, 13, and 14
-    // Event-driven: verification is triggered by _measureBottomSheetHeight when height is measured.
-    // If height is already known, verify immediately; otherwise wait for measurement callback.
-    if ((stepNumber >= 7 && stepNumber <= 10) || stepNumber == 13 || stepNumber == 14) {
-      if (_bottomSheetHeight != null) {
-        // Height already measured, verify immediately
-        await _verifyTargetAboveBottomSheet();
-      }
-      // If height not yet measured, _measureBottomSheetHeight will trigger verification
-      // via post-frame callback when measurement completes (event-driven, no polling)
-    }
-    
-    if (!mounted || currentToken != _syncToken) return;
-    
-    // STEP 4 READINESS GATE: ensure HomeScreen + target + paint surface are ready.
-    if (stepNumber == 4) {
-      final targetKey = widget.highlightedKey ?? widget.secondHighlightedKey;
-      final ready = _isStep4Ready(targetKey);
-
-      if (!ready) {
-        _step4ReadinessAttempts++;
-        if (kOnboardingDebug && kDebugMode) {
-          debugPrint(
-            '[STEP 4 READY] Gate NOT ready (attempt $_step4ReadinessAttempts/$_maxStep4ReadinessAttempts). '
-            'Scheduling next frame.',
-          );
-        }
-
-        if (_step4ReadinessAttempts <= _maxStep4ReadinessAttempts) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (!mounted || currentToken != _syncToken) return;
-            _syncToStep();
-          });
-        } else {
-          if (kOnboardingDebug && kDebugMode) {
-            debugPrint('[STEP 4 READY] Gate FAILED after $_step4ReadinessAttempts attempts. '
-                'Giving up on measurement for this session.');
-          }
-          if (mounted && currentToken == _syncToken) {
-            setState(() {
-              _isSyncing = false;
-            });
-          }
-        }
-        return;
-      } else {
-        if (kOnboardingDebug && kDebugMode) {
-          debugPrint(
-            '[STEP 4 READY] Gate PASSED (attempt $_step4ReadinessAttempts). '
-            'Proceeding to stable rect measurement.',
-          );
-        }
-      }
-    }
-
-    // Measure target rect - UNIFIED pipeline for all steps (4-16)
-    // Retry until rect is stable (<= 2px delta) or attempts exhausted.
-    // This restores the stable-rect behavior required for grids/lists.
-    Rect? measuredRect;
-    final targetKey = widget.highlightedKey ?? widget.secondHighlightedKey;
-    
-    // Stable measurement loop: up to 5 attempts, accept when delta <= 2 on all components
-    Rect? previousRect;
-    for (int attempt = 0; attempt < 5; attempt++) {
-      if (!mounted || currentToken != _syncToken) return;
+    if (stepChanged) {
+      // Reset stability when step/target changes
+      _lastMeasuredRect = null;
+      _candidateRect = null;
+      _stableRect = null;
+      _stableFrames = 0;
+      _hasEverLockedCutoutForThisStep = false;
+      _lastNoCutoutReason = null;
+      _lastResetReason = null;
+      _lastRectDelta = null;
+      _resetCount = 0;
+      _pendingMeasureFrames = 0;
+      _framesSinceFirstCandidate = 0;
+      _paintRect = null;
+      _rectAnimController.reset();
       
-      final currentRect = _getRectForKey(targetKey);
-      if (currentRect != null) {
-        if (previousRect != null) {
-          final deltaX = (currentRect.left - previousRect.left).abs();
-          final deltaY = (currentRect.top - previousRect.top).abs();
-          final deltaW = (currentRect.width - previousRect.width).abs();
-          final deltaH = (currentRect.height - previousRect.height).abs();
-          
-          if (deltaX <= 2 && deltaY <= 2 && deltaW <= 2 && deltaH <= 2) {
-            // Stable rect - accept and stop
-            measuredRect = currentRect;
-            break;
-          }
-        }
-        previousRect = currentRect;
-      }
+      // Update tracked identity
+      _lastHighlightedKey = widget.highlightedKey;
+      _lastSecondHighlightedKey = widget.secondHighlightedKey;
+      _lastCurrentStep = widget.currentStep;
       
-      // Wait for next frame before re-measuring
-      await WidgetsBinding.instance.endOfFrame;
-    }
-    
-    _targetRect = measuredRect;
-    
-    // Also measure secondHighlightedKey if present
-    if (widget.secondHighlightedKey != null) {
-      Rect? measuredSecondRect;
-      Rect? previousSecondRect;
-      for (int attempt = 0; attempt < 5; attempt++) {
-        if (!mounted || currentToken != _syncToken) return;
-        
-        final currentRect = _getRectForKey(widget.secondHighlightedKey);
-        if (currentRect != null) {
-          if (previousSecondRect != null) {
-            final deltaX = (currentRect.left - previousSecondRect.left).abs();
-            final deltaY = (currentRect.top - previousSecondRect.top).abs();
-            final deltaW = (currentRect.width - previousSecondRect.width).abs();
-            final deltaH = (currentRect.height - previousSecondRect.height).abs();
-            
-            if (deltaX <= 2 && deltaY <= 2 && deltaW <= 2 && deltaH <= 2) {
-              measuredSecondRect = currentRect;
-              break;
-            }
-          }
-          previousSecondRect = currentRect;
-        }
-        
-        await WidgetsBinding.instance.endOfFrame;
-      }
-      _secondTargetRect = measuredSecondRect;
-    } else {
-      _secondTargetRect = null;
-    }
-    
-    if (stepNumber == 4) {
-      if (measuredRect != null) {
-        // Reset attempts once we have a usable rect
-        _step4ReadinessAttempts = 0;
-        _updateHighlightReady(true);
-      } else {
-        _updateHighlightReady(false);
-      }
-    } else {
-      // Any non-step-4 step clears the step 4 readiness flag
-      _updateHighlightReady(false);
-    }
-    
-    // If we couldn't compute any rects, schedule a guarded retry
-    if (measuredRect == null && _secondTargetRect == null && _retryAttempts < _maxRetryAttempts) {
-      _retryAttempts++;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && currentToken == _syncToken) {
-          _syncToStep();
-        }
-      });
-      return; // Don't set _isSyncing = false yet, wait for retry
-    } else if (measuredRect != null || _secondTargetRect != null) {
-      _retryAttempts = 0; // Reset on success
-    }
-    
-    if (mounted && currentToken == _syncToken) {
-      setState(() {
-        _isSyncing = false;
-      });
-    }
-  }
-
-  void _updateHighlightReady(bool ready) {
-    if (_lastHighlightReady == ready) return;
-    _lastHighlightReady = ready;
-    if (widget.onHighlightReadyChanged != null) {
-      if (kOnboardingDebug && kDebugMode) {
-        debugPrint('[STEP4_LOCK] ready=$ready');
-      }
-      widget.onHighlightReadyChanged!(ready);
+      _measureRects();
     }
   }
 
   @override
   void dispose() {
     widget.scrollController?.removeListener(_onScroll);
-    // Ensure readiness flag is cleared when overlay is disposed.
-    _updateHighlightReady(false);
+    _rectAnimController.dispose();
     super.dispose();
   }
 
-  /// Recompute target rects from keys (called on scroll or key changes).
-  void _recomputeRects() {
-    if (!mounted) return;
-    final primaryRect = _getRectForKey(widget.highlightedKey);
-    final secondRect = widget.secondHighlightedKey != null
-        ? _getRectForKey(widget.secondHighlightedKey)
-        : null;
-    
-    if (primaryRect != null || secondRect != null) {
-      setState(() {
-        _targetRect = primaryRect;
-        _secondTargetRect = secondRect;
-        _retryAttempts = 0; // Reset on success
-      });
-    } else if (_retryAttempts < _maxRetryAttempts) {
-      // Retry next frame if rects not available yet
-      _retryAttempts++;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _recomputeRects();
-      });
-    }
+  void _onScroll() {
+    _measureRects();
   }
 
-  /// Step 4 readiness check: require non-null contexts and non-zero sizes for
-  /// both the target RenderBox and the paint surface RenderBox.
-  bool _isStep4Ready(GlobalKey? targetKey) {
-    if (targetKey?.currentContext == null) {
-      if (kOnboardingDebug && kDebugMode) {
-        debugPrint('[STEP 4 READY] targetKey.currentContext is null');
-      }
-      return false;
-    }
-    if (_paintSurfaceKey.currentContext == null) {
-      if (kOnboardingDebug && kDebugMode) {
-        debugPrint('[STEP 4 READY] _paintSurfaceKey.currentContext is null');
-      }
-      return false;
-    }
-
-    final targetBox = targetKey!.currentContext!.findRenderObject() as RenderBox?;
-    final paintBox = _paintSurfaceKey.currentContext!.findRenderObject() as RenderBox?;
-
-    final targetReady = targetBox != null && targetBox.hasSize && targetBox.size.width > 0 && targetBox.size.height > 0;
-    final paintReady = paintBox != null && paintBox.hasSize && paintBox.size.width > 0 && paintBox.size.height > 0;
-
-    if (kOnboardingDebug && kDebugMode) {
-      debugPrint(
-        '[STEP 4 READY] readiness check: '
-        'targetReady=$targetReady (box=$targetBox), '
-        'paintReady=$paintReady (box=$paintBox)',
-      );
-    }
-
-    return targetReady && paintReady;
+  /// Check if two rects differ beyond the configured threshold.
+  bool _rectsDiffer(Rect? a, Rect? b) {
+    if (a == null || b == null) return a != b;
+    return _rectDelta(a, b) > _kRectChangeThreshold;
   }
 
-  Future<void> _ensureTargetVisible() async {
-    final targetKey = widget.highlightedKey ?? widget.secondHighlightedKey;
-    if (targetKey == null) return;
+  /// Maximum absolute difference between corresponding edges of two rects.
+  double _rectDelta(Rect a, Rect b) {
+    final dx = (a.left - b.left).abs();
+    final dy = (a.top - b.top).abs();
+    final dw = (a.width - b.width).abs();
+    final dh = (a.height - b.height).abs();
+    return [dx, dy, dw, dh].reduce((value, element) => value > element ? value : element);
+  }
+
+  /// Heuristic to decide if a rect looks like a tappable tile instead of a header.
+  bool _isSaneTileRect(Rect r, EdgeInsets padding) {
+    // Require a minimum size to avoid tiny header elements.
+    if (r.height < 80.0) return false;
+    if (r.width < 120.0) return false;
+    // Avoid very top-of-screen regions (status/app bar + a safety margin).
+    if (r.top < (padding.top + 80.0)) return false;
+    return true;
+  }
+
+  /// Compute combined rect from both highlighted keys.
+  Rect? _computeCombinedRect() {
+    final rect1 = _getRectForKey(widget.highlightedKey);
+    final rect2 = _getRectForKey(widget.secondHighlightedKey);
     
-    final targetContext = targetKey.currentContext;
-    if (targetContext == null) return;
+    if (rect1 == null && rect2 == null) return null;
+    if (rect1 == null) return rect2;
+    if (rect2 == null) return rect1;
     
-    final stepNumber = widget.currentStep ?? 4;
+    // Combine both rects
+    final minLeft = rect1.left < rect2.left ? rect1.left : rect2.left;
+    final minTop = rect1.top < rect2.top ? rect1.top : rect2.top;
+    final maxRight = rect1.right > rect2.right ? rect1.right : rect2.right;
+    final maxBottom = rect1.bottom > rect2.bottom ? rect1.bottom : rect2.bottom;
     
-    // Step-specific alignment mapping
-    double alignment;
-    if (stepNumber == 7) {
-      alignment = 0.12;
-    } else if (stepNumber == 8 || stepNumber == 9) {
-      alignment = 0.15;
-    } else if (stepNumber == 10) {
-      alignment = 0.15;
-    } else if (stepNumber == 13 || stepNumber == 14) {
-      alignment = 0.18;
-    } else {
-      alignment = 0.2;
-    }
-    
-    // Use Scrollable.ensureVisible (not controller)
-    Scrollable.ensureVisible(
-      targetContext,
-      duration: const Duration(milliseconds: 300),
-      curve: Curves.easeInOut,
-      alignment: alignment,
-      alignmentPolicy: ScrollPositionAlignmentPolicy.explicit,
+    return Rect.fromLTRB(minLeft, minTop, maxRight, maxBottom);
+  }
+
+  /// Check if target is mounted (has context).
+  bool _isTargetMounted() {
+    return widget.highlightedKey?.currentContext != null ||
+           widget.secondHighlightedKey?.currentContext != null;
+  }
+
+  void _measureRects() {
+    // Prevent multiple scheduled measurements
+    if (_measurementScheduled) return;
+    _measurementScheduled = true;
+
+    OnboardingDebugLog.log(
+      'overlay',
+      'schedule measurement (pendingFrames=$_pendingMeasureFrames, hasLastMeasured=${_lastMeasuredRect != null})',
     );
-    
-    await WidgetsBinding.instance.endOfFrame;
-    
-    // DEBUG: Log Steps 7-11 auto-scroll (temporary, removable)
-    if (kOnboardingDebug && kDebugMode && stepNumber >= 7 && stepNumber <= 11) {
-      final scrollOffset = widget.scrollController?.offset ?? 0;
-      debugPrint('[GUIDED_OVERLAY Steps 7-11] After ensureVisible for step $stepNumber, scrollOffset: $scrollOffset');
-    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      bool needsAnotherFrame = false;
+      try {
+        if (!mounted) return;
+
+        // Compute candidate rect in overlay coordinates
+        final candidateRect = _computeCombinedRect();
+        final bottomSheetHeight = _measureBottomSheetHeight();
+        final bool hasAnyKey =
+            widget.highlightedKey != null || widget.secondHighlightedKey != null;
+        final bool targetMounted = _isTargetMounted();
+
+        setState(() {
+          _bottomSheetHeight = bottomSheetHeight;
+          _candidateRect = candidateRect;
+
+          // Bounded stability pump: ensure we can lock within a few frames.
+          final int requiredFrames = _hasEverLockedCutoutForThisStep ? 1 : 2;
+
+          // Frame counter for visible candidate while no stable rect is locked.
+          if (!targetMounted || candidateRect == null) {
+            _framesSinceFirstCandidate = 0;
+          } else if (_stableRect == null) {
+            _framesSinceFirstCandidate += 1;
+            OnboardingDebugLog.log(
+              'overlay',
+              'framesSinceFirstCandidate++ => $_framesSinceFirstCandidate',
+            );
+          }
+
+          if (!targetMounted) {
+            // Target not mounted: no cutout, but keep sheet visible and barrier off.
+            _lastMeasuredRect = null;
+            _stableRect = null;
+            _stableFrames = 0;
+            _paintRect = null;
+            _rectAnimController.reset();
+            _lastNoCutoutReason = 'not mounted';
+            _lastResetReason = 'target not mounted';
+            _pendingMeasureFrames = 0;
+            _framesSinceFirstCandidate = 0;
+          } else if (_lastMeasuredRect == null) {
+            // First measurement - set it but don't show cutout yet.
+            _lastMeasuredRect = candidateRect;
+            _stableFrames = 0;
+            _stableRect = null;
+            if (candidateRect == null) {
+              _lastNoCutoutReason = 'candidate rect is null';
+            } else {
+              _lastNoCutoutReason =
+                  'first candidate captured; waiting for next frame';
+              // Start bounded pump whenever we see the first candidate.
+              _pendingMeasureFrames = _kMaxStabilityFrames;
+              needsAnotherFrame = true;
+            }
+          } else if (candidateRect == null) {
+            // Target disappeared - reset stability.
+            _lastMeasuredRect = null;
+            _stableFrames = 0;
+            _stableRect = null;
+            _paintRect = null;
+            _rectAnimController.reset();
+            _lastNoCutoutReason = 'candidate rect disappeared';
+            _lastResetReason = 'candidate rect disappeared';
+            _resetCount++;
+            _pendingMeasureFrames = 0;
+            _framesSinceFirstCandidate = 0;
+          } else if (_rectsDiffer(candidateRect, _lastMeasuredRect)) {
+            // Rect changed beyond threshold - reset stability.
+            final delta = _rectDelta(candidateRect, _lastMeasuredRect!);
+            _lastRectDelta = delta;
+            _lastMeasuredRect = candidateRect;
+            _stableFrames = 0;
+            _stableRect = null;
+            _paintRect = null;
+            _rectAnimController.reset();
+            _lastNoCutoutReason =
+                'rect unstable; delta=${delta.toStringAsFixed(2)} > threshold';
+            _lastResetReason = 'rect jitter; delta=${delta.toStringAsFixed(2)}';
+            _resetCount++;
+            _pendingMeasureFrames = _kMaxStabilityFrames;
+            needsAnotherFrame = true;
+          } else {
+            // Rect is stable - increment frame counter.
+            _stableFrames += 1;
+            OnboardingDebugLog.log(
+              'overlay',
+              'stableFrames++ => $_stableFrames (required=$requiredFrames)',
+            );
+            if (_stableFrames >= requiredFrames || _pendingMeasureFrames <= 0) {
+              // Required frames matched (or pump exhausted).
+              final previousStableRect = _stableRect;
+              _stableRect = candidateRect;
+
+              // Mark that we've locked a cutout for this step.
+              if (!_hasEverLockedCutoutForThisStep) {
+                _hasEverLockedCutoutForThisStep = true;
+              }
+              _lastNoCutoutReason = null;
+              _pendingMeasureFrames = 0;
+              _framesSinceFirstCandidate = 0;
+
+              // Interrupt-safe animation retargeting.
+              if (previousStableRect != null &&
+                  _rectsDiffer(previousStableRect, _stableRect!)) {
+                final beginRect = _paintRect ?? previousStableRect;
+                _rectAnimController.stop();
+                _rectAnimation = _RectTween(begin: beginRect, end: _stableRect)
+                    .animate(
+                  CurvedAnimation(
+                    parent: _rectAnimController,
+                    curve: Curves.easeOut,
+                  ),
+                );
+                _rectAnimController.forward(from: 0.0);
+              } else if (previousStableRect == null) {
+                // First stable rect - set directly without animation.
+                _paintRect = _stableRect;
+              }
+            } else {
+              _lastNoCutoutReason =
+                  'rect stable; waiting for frame $_stableFrames/$requiredFrames';
+              // Still pending: request another frame if we have budget.
+              if (_pendingMeasureFrames > 0) {
+                _pendingMeasureFrames -= 1;
+                needsAnotherFrame = true;
+              }
+            }
+          }
+
+          // Notify highlight ready state (based on stable rect).
+          final bool isReady = _stableRect != null;
+          widget.onHighlightReadyChanged?.call(isReady);
+
+          // Push latest overlay diagnostics into shared logger.
+          OnboardingDebugLog.overlayState = OnboardingOverlayDebugState(
+            hasAnyKey: hasAnyKey,
+            primaryTargetMounted: widget.highlightedKey?.currentContext != null,
+            secondaryTargetMounted:
+                widget.secondHighlightedKey?.currentContext != null,
+            candidateRect: candidateRect,
+            stableRect: _stableRect,
+            paintRect: _paintRect,
+            stableFrames: _stableFrames,
+            requiredFrames: requiredFrames,
+            measurementScheduled: _measurementScheduled,
+            lastNoCutoutReason: _lastNoCutoutReason,
+            lastResetReason: _lastResetReason,
+            pendingMeasureFrames: _pendingMeasureFrames,
+            resetCount: _resetCount,
+            lastRectDelta: _lastRectDelta,
+            framesSinceFirstCandidate: _framesSinceFirstCandidate,
+          );
+          OnboardingDebugLog.lastNoCutoutReason = _lastNoCutoutReason;
+        });
+
+        OnboardingDebugLog.log(
+          'overlay',
+          'run measurement: mounted=$targetMounted candidateRect=$candidateRect '
+          'stableRect=$_stableRect stableFrames=$_stableFrames '
+          'pendingFrames=$_pendingMeasureFrames resetCount=$_resetCount',
+        );
+      } finally {
+        // IMPROVEMENT 4: Always reset guard, even if early return or exception.
+        _measurementScheduled = false;
+      }
+
+      // Bounded pump: schedule another measurement while we have a pending cutout.
+      if (needsAnotherFrame && mounted) {
+        OnboardingDebugLog.log(
+          'overlay',
+          'pump: scheduling next frame (pendingFrames=$_pendingMeasureFrames)',
+        );
+        _measureRects();
+      }
+    });
   }
 
-  Future<void> _verifyTargetAboveBottomSheet() async {
-    final targetKey = widget.highlightedKey ?? widget.secondHighlightedKey;
-    if (targetKey == null) return;
-    
-    final targetContext = targetKey.currentContext;
-    if (targetContext == null) return;
-    
-    final renderBox = targetContext.findRenderObject() as RenderBox?;
-    if (renderBox == null || !renderBox.hasSize) return;
-    
-    final screenSize = MediaQuery.of(context).size;
-    final viewPadding = MediaQuery.of(context).padding;
-    final safeAreaTop = viewPadding.top;
-    
-    // Use estimated height (last-good version uses estimate)
-    final estimatedHeight = _shouldUseBottomSheet 
-        ? MobileGuidedBottomSheet.getEstimatedHeight(context)
-        : 0.0;
-    
-    final safeBottom = screenSize.height - estimatedHeight - viewPadding.bottom - 12;
-    final globalPosition = renderBox.localToGlobal(Offset.zero);
-    final rectBottom = globalPosition.dy + renderBox.size.height;
-    
-    // If target is below safe bottom, scroll up
-    if (rectBottom > safeBottom) {
-      final overlap = rectBottom - safeBottom;
-      final scrollController = widget.scrollController;
-      if (scrollController != null && scrollController.hasClients) {
-        final currentOffset = scrollController.position.pixels;
-        final newOffset = (currentOffset + overlap + 12).clamp(
-          scrollController.position.minScrollExtent,
-          scrollController.position.maxScrollExtent,
-        );
-        await scrollController.animateTo(
-          newOffset,
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
-        );
-        await WidgetsBinding.instance.endOfFrame;
-      }
-    }
-    
-    // Also ensure target top is below app bar
-    final rectTop = globalPosition.dy;
-    if (rectTop < safeAreaTop + 56) {
-      final scrollController = widget.scrollController;
-      if (scrollController != null && scrollController.hasClients) {
-        final currentOffset = scrollController.position.pixels;
-        final neededScroll = (safeAreaTop + 56 - rectTop);
-        final newOffset = (currentOffset - neededScroll).clamp(
-          scrollController.position.minScrollExtent,
-          scrollController.position.maxScrollExtent,
-        );
-        await scrollController.animateTo(
-          newOffset,
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
-        );
-        await WidgetsBinding.instance.endOfFrame;
-      }
-    }
-  }
-
-  /// Measure the rect for a target key in the paint surface's local coordinate space.
-  /// Returns null if either the target or the paint surface is not ready.
-  /// Uses explicit coordinate conversion: localTopLeft = targetGlobalTopLeft - overlayGlobalTopLeft
   Rect? _getRectForKey(GlobalKey? key) {
     if (key?.currentContext == null) return null;
-    if (_paintSurfaceKey.currentContext == null) return null;
-    
     final targetBox = key!.currentContext!.findRenderObject() as RenderBox?;
-    final overlayBox = _paintSurfaceKey.currentContext!.findRenderObject() as RenderBox?;
+    final overlayContext = _paintSurfaceKey.currentContext ?? context;
+    final overlayBox = overlayContext.findRenderObject() as RenderBox?;
     if (targetBox == null || !targetBox.hasSize || overlayBox == null || !overlayBox.hasSize) {
       return null;
     }
-    
-    // Get global positions
-    final targetGlobalTopLeft = targetBox.localToGlobal(Offset.zero);
-    final overlayGlobalTopLeft = overlayBox.localToGlobal(Offset.zero);
-    
-    // Convert to overlay's local coordinate space using explicit subtraction
-    final localTopLeft = targetGlobalTopLeft - overlayGlobalTopLeft;
-    
-    // Create rect in overlay's local coordinate space
-    final localRect = Rect.fromLTWH(
-      localTopLeft.dx,
-      localTopLeft.dy,
-      targetBox.size.width,
-      targetBox.size.height,
-    );
 
-    // STEP 4 DIAGNOSTICS: log both global and local rect plus canvas size + DPR,
-    // but only when guided onboarding is active and we're on step 4.
-    if (kOnboardingDebug && kDebugMode) {
-      final isStep4 = GuidedOnboardingController.isActive &&
-          GuidedOnboardingController.currentStep == GuidedOnboardingStep.trackSelection;
-      if (isStep4) {
-        final overlaySize = overlayBox.size;
-        final dpr = WidgetsBinding.instance.platformDispatcher.views.isNotEmpty
-            ? WidgetsBinding.instance.platformDispatcher.views.first.devicePixelRatio
-            : 1.0;
-        debugPrint(
-          '[STEP 4 DEBUG] targetGlobalTopLeft: ($targetGlobalTopLeft), '
-          'overlayGlobalTopLeft: ($overlayGlobalTopLeft), '
-          'localRect: $localRect, '
-          'overlaySize: $overlaySize, '
-          'devicePixelRatio: $dpr',
-        );
-      }
-    }
+    // Compute target rect in the coordinate space of the overlay's paint surface.
+    final topLeftGlobal = targetBox.localToGlobal(Offset.zero);
+    final topRightGlobal = targetBox.localToGlobal(Offset(targetBox.size.width, 0));
+    final bottomLeftGlobal = targetBox.localToGlobal(Offset(0, targetBox.size.height));
+    final bottomRightGlobal = targetBox.localToGlobal(targetBox.size.bottomRight(Offset.zero));
 
-    return localRect;
+    final tl = overlayBox.globalToLocal(topLeftGlobal);
+    final tr = overlayBox.globalToLocal(topRightGlobal);
+    final bl = overlayBox.globalToLocal(bottomLeftGlobal);
+    final br = overlayBox.globalToLocal(bottomRightGlobal);
+
+    final left = [tl.dx, tr.dx, bl.dx, br.dx].reduce((a, b) => a < b ? a : b);
+    final right = [tl.dx, tr.dx, bl.dx, br.dx].reduce((a, b) => a > b ? a : b);
+    final top = [tl.dy, tr.dy, bl.dy, br.dy].reduce((a, b) => a < b ? a : b);
+    final bottom = [tl.dy, tr.dy, bl.dy].reduce((a, b) => a > b ? a : b);
+
+    return Rect.fromLTRB(left, top, right, bottom);
+  }
+
+  double? _measureBottomSheetHeight() {
+    final context = _bottomSheetKey.currentContext;
+    if (context == null) return null;
+    final renderBox = context.findRenderObject() as RenderBox?;
+    return renderBox?.size.height;
   }
 
   @override
   Widget build(BuildContext context) {
-    // Advanced mode: steps 4-16 with bottom sheet
-    if (_isAdvancedMode && _shouldUseBottomSheet) {
-      // Use measured height if available, otherwise use 0.0 (safe fallback)
-      // Bottom sheet is Layer 3 (always on top), so it remains tappable even if barrier covers full screen
-      final excludeHeight = _bottomSheetHeight ?? 0.0;
-      // Determine whether a tap-blocking barrier should be shown above the content.
-      // CRITICAL: Barrier logic must handle different step requirements:
-      // - Step 4 (Home): Must block ALL taps even before TrackTile key has context (prevents accidental track taps).
-      //   Once rect exists, barrier switches to cutout mode (only Track 1 tappable).
-      //   STRICTLY SCOPED: This special behavior applies ONLY when stepNumber == 4.
-      // - Step 13 (TaskScreen): Selection phase ONLY - barrier MUST be OFF by design so answers are tappable.
-      //   Step 13 is always selection phase; feedback phase is handled by Step 14.
-      // - Step 14 (TaskScreen): Feedback phase - barrier ON when highlighted widget exists and has context (normal gating).
-      // - All other steps: Barrier ON only when highlighted key(s) have context (normal gating).
-      final int? stepNumber =
-          GuidedOnboardingController.getCurrentStepNumber();
-      final bool hasAnyContext =
-          (widget.highlightedKey?.currentContext != null) ||
-              (widget.secondHighlightedKey?.currentContext != null);
-      final bool hasAnyKey = widget.highlightedKey != null || widget.secondHighlightedKey != null;
-      
-      // Step 4 special case: block ALL taps even before rect is computed (key exists but no context yet)
-      // This prevents accidental track taps before Track 1 is highlighted.
-      // Once rect exists (hasAnyContext), barrier switches to cutout mode allowing only Track 1.
-      // STRICTLY SCOPED: Only applies when stepNumber == 4; as soon as stepNumber != 4, normal gating applies.
-      final bool isStep4 = stepNumber == 4;
-      
-      // Step 13: Selection phase ONLY (barrier OFF by design)
-      // Step 13 is always in selection phase - TaskScreen shows overlay with promptPiecesKey/checkAnswerKey.
-      // These keys have context (they're mounted), but barrier MUST be OFF to allow tapping answers.
-      // Feedback phase is handled by Step 14, not Step 13.
-      final bool isStep13 = stepNumber == 13;
-      // Step 13: barrier OFF (always, by design - allows tapping answers during selection)
-      // This is an explicit boolean to prevent regressions - Step 13 always has barrier OFF
-      final bool isStep13Selection = isStep13;
-      
-      // Barrier logic per requirements:
-      // - Step 4: barrier ON if key exists (even without context)
-      // - Step 13: barrier OFF (explicitly excluded - selection phase only, answers must be tappable)
-      // - Step 14 and all other steps: barrier ON when context exists (normal gating)
-      final bool shouldShowBarrier = hasAnyKey && (
-        isStep4 || // Step 4: barrier on if key exists (blocks all until rect ready, then cutout mode)
-        (!isStep13Selection && hasAnyContext) // Step 14 and all other steps: barrier requires context (normal gating)
-      );
-      
-      // Debug logging: only log when stepNumber changes (not every frame)
-      if (kDebugMode && stepNumber != null && stepNumber != _lastLoggedStepNumber) {
-        _lastLoggedStepNumber = stepNumber;
-        debugPrint(
-          '[GUIDED_OVERLAY_BARRIER] stepNumber=$stepNumber, '
-          'shouldShowBarrier=$shouldShowBarrier, '
-          'isStep4=$isStep4, '
-          'isStep13Selection=$isStep13Selection, '
-          'hasAnyKey=$hasAnyKey, '
-          'hasAnyContext=$hasAnyContext'
-        );
-      }
-      
-      // Schedule measurement after this build completes (debounced)
-      _scheduleMeasurement();
-      
+    final hasAnyKey = widget.highlightedKey != null || widget.secondHighlightedKey != null;
+    final excludeHeight = _bottomSheetHeight ?? 0.0;
+    
+    // IMPROVEMENT 1: Barrier vs Cutout gating
+    // Separate target mounted check from cutout ready check
+    final bool _targetMounted = _isTargetMounted();
+    final bool _cutoutReady = _stableRect != null;
+    
+    // Barrier shows when target is mounted (even if cutout not ready yet)
+    final bool shouldShowBarrier = hasAnyKey && _targetMounted;
+    
+    // If target not mounted => render nothing (barrier OFF)
+    if (!_targetMounted) {
       return Stack(
         children: [
-          // LAYER 1: Child content (app content - tap-blocked by barrier)
-          if (widget.child != null) widget.child!,
-          
-          // LAYER 2: Dimmed overlay + Barrier (blocks taps to app content only)
-          // IMPORTANT: Barrier does NOT cover bottom sheet area
-          if (widget.showDimmedOverlay) ...[
-            // Visual scrim (full screen for visual effect, NON-INTERACTIVE)
-            // Only render if we have at least one valid rect (prevents full-screen blocking)
-            if (_targetRect != null || _secondTargetRect != null)
-              Positioned.fill(
-                child: IgnorePointer(
-                  ignoring: true, // Scrim is purely visual - does not intercept taps
-                  child: _DimmedOverlay(
-                    targetRect: _targetRect,
-                    secondTargetRect: _secondTargetRect,
-                    paintSurfaceKey: _paintSurfaceKey,
-                  ),
-                ),
-              ),
+          // Only show bottom sheet if step is set
+          if (widget.currentStep != null)
+            MobileGuidedBottomSheet(
+              key: _bottomSheetKey,
+              text: widget.text,
+              stepNumber: widget.currentStep,
+              showContinueButton: widget.showContinueButton,
+              showCompletionButton: widget.showCompletionButton,
+              continueButtonText: widget.continueButtonText,
+              onContinue: widget.onContinue,
+              onComplete: widget.onComplete,
+              onPreviousStep: widget.onPreviousStep,
+              onSkip: widget.onSkip,
+              showNavigationButtons: true,
+            ),
+        ],
+      );
+    }
 
-            // DEBUG ONLY: Draw a visible border for Step 4 using the same local rect as the cutout
-            if (kOnboardingDebug &&
-                widget.currentStep != null &&
-                widget.currentStep == 4 &&
-                _targetRect != null) ...[
-              // Debug log for Step 4 rect and paint surface size
-              Builder(
-                builder: (context) {
-                  if (kOnboardingDebug && kDebugMode) {
-                    final paintBox = _paintSurfaceKey.currentContext?.findRenderObject() as RenderBox?;
-                    final paintSize = paintBox?.size ?? Size.zero;
-                    debugPrint(
-                      '[STEP 4 DEBUG] _targetRect (local): $_targetRect, '
-                      'paintSurfaceSize: $paintSize',
-                    );
-                  }
-                  return const SizedBox.shrink();
+    // Use animated rect for painting if available, otherwise use stable rect.
+    final paintRect = _paintRect ?? _stableRect;
+
+    // Step number for safety hatches.
+    final int? stepNumber = widget.currentStep;
+    final bool isStep4 = stepNumber == 4;
+    final bool isStep5 = stepNumber == 5;
+    final bool isStep6 = stepNumber == 6;
+
+    return Stack(
+      children: [
+        // LAYER 1: Dimmed overlay (visual only, no hit-testing)
+        if (widget.showDimmedOverlay && shouldShowBarrier)
+          Positioned.fill(
+            child: IgnorePointer(
+              ignoring: true,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final Rect? effectiveRect = isStep4 && _candidateRect != null
+                      ? _candidateRect
+                      : (_cutoutReady ? paintRect : null);
+                  return CustomPaint(
+                    key: _paintSurfaceKey,
+                    size: Size(constraints.maxWidth, constraints.maxHeight),
+                    painter: _OverlayPainter(
+                      // For Step 4 we use the candidate rect immediately as the cutout.
+                      cutoutRect: effectiveRect,
+                      dimColor: Colors.black.withValues(alpha: 0.45),
+                    ),
+                  );
                 },
               ),
-              Positioned(
-                left: _targetRect!.left,
-                top: _targetRect!.top,
-                width: _targetRect!.width,
-                height: _targetRect!.height,
-                child: IgnorePointer(
-                  child: Container(
-                    decoration: BoxDecoration(
-                      border: Border.all(
-                        color: Colors.redAccent,
-                        width: 2,
-                      ),
-                      // Semi-transparent fill so the debug area is clearly visible.
-                      color: Colors.redAccent.withOpacity(0.18),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-            // Tap blocker (excludes bottom sheet area - only covers content above sheet)
-            if (shouldShowBarrier)
-              Positioned(
+            ),
+          ),
+
+        // LAYER 2: Full-screen interaction barrier (blocks ALL taps when target is mounted).
+        // When cutout is ready: allows taps through cutout hole only.
+        // When cutout is NOT ready: blocks ALL taps (except bottom sheet area),
+        // with step-specific overrides:
+        //  - Step 4: immediate override using candidateRect.
+        //  - Step 5 & 6: override if stability hasn't locked after a few pump frames.
+        if (shouldShowBarrier)
+          Builder(
+            builder: (context) {
+              final padding = MediaQuery.of(context).padding;
+              bool allowFallbackHole = false;
+
+              if (isStep4 && _targetMounted && _candidateRect != null && !_cutoutReady) {
+                // Step 4: immediate override as soon as we have a candidate rect.
+                allowFallbackHole = true;
+              } else if ((isStep5 || isStep6) &&
+                  _targetMounted &&
+                  _candidateRect != null &&
+                  !_cutoutReady &&
+                  // Require at least 2 frames with a visible candidate and no stable rect.
+                  _framesSinceFirstCandidate >= 2) {
+                // Only allow fallback if the candidateRect looks like a real tile,
+                // not an app bar/header region.
+                if (_isSaneTileRect(_candidateRect!, padding)) {
+                  allowFallbackHole = true;
+                } else {
+                  final stepLabel = stepNumber ?? -1;
+                  final reason =
+                      'StepFallback SUPPRESSED (step=$stepLabel): candidateRect looks like header rect=$_candidateRect';
+                  _lastResetReason = reason;
+                  OnboardingDebugLog.log('overlay_hit_test', reason);
+                }
+              }
+
+              final bool barrierCutoutReady = _cutoutReady || allowFallbackHole;
+              final Rect? barrierRect =
+                  _cutoutReady ? paintRect : (allowFallbackHole ? _candidateRect : null);
+
+              if (allowFallbackHole) {
+                final stepLabel = stepNumber ?? -1;
+                final message = stepLabel == 4
+                    ? 'Step4Override ACTIVE: using candidateRect as LOCAL cutout rect=$_candidateRect'
+                    : 'StepFallback ACTIVE (step=$stepLabel): '
+                      'framesSinceFirstCandidate=$_framesSinceFirstCandidate '
+                      'rect=$_candidateRect';
+                OnboardingDebugLog.log('overlay_hit_test', message);
+              }
+
+              return Positioned(
                 left: 0,
                 top: 0,
                 right: 0,
-                bottom: excludeHeight, // Exclude bottom sheet area (0.0 until measured)
+                bottom: excludeHeight,
                 child: GuidedOverlayBarrier(
                   targetKey: widget.highlightedKey ?? widget.secondHighlightedKey!,
-                  secondTargetKey:
-                      widget.highlightedKey != null ? widget.secondHighlightedKey : null,
+                  secondTargetKey: widget.highlightedKey != null ? widget.secondHighlightedKey : null,
+                  cutoutReady: barrierCutoutReady,
+                  cutoutRect: barrierRect,
                   child: const SizedBox.expand(),
                 ),
-              ),
-          ],
-          
-          // LAYER 3: Bottom sheet (ALWAYS on top, NEVER blocked)
+              );
+            },
+          ),
+
+        // LAYER 3: Bottom sheet (ALWAYS on top, NEVER blocked)
+        if (widget.currentStep != null)
           MobileGuidedBottomSheet(
-            key: _bottomSheetKey, // Key for measuring actual rendered height
+            key: widget.bottomSheetKey ?? _bottomSheetKey,
             text: widget.text,
             stepNumber: widget.currentStep,
             showContinueButton: widget.showContinueButton,
@@ -752,414 +601,73 @@ class _GuidedOverlayState extends State<GuidedOverlay> {
             onSkip: widget.onSkip,
             showNavigationButtons: true,
           ),
-        ],
-      );
-    }
-    
-    // Simple mode: legacy behavior
-    return Stack(
-      children: [
-        if (widget.showDimmedOverlay)
-          Positioned.fill(
-            child: _DimmedOverlay(
-              highlightedKey: widget.highlightedKey,
-              secondHighlightedKey: widget.secondHighlightedKey,
-              scrollController: widget.scrollController,
-            ),
-          ),
-        _MessageBubble(
-          text: widget.text,
-          showCompletionButton: widget.showCompletionButton,
-          showContinueButton: widget.showContinueButton,
-          continueButtonText: widget.continueButtonText,
-          highlightedKey: widget.highlightedKey,
-          onComplete: widget.onComplete,
-          onContinue: widget.onContinue,
-          scrollController: widget.scrollController,
-        ),
       ],
-    );
-  }
-}
-
-class _DimmedOverlay extends StatefulWidget {
-  const _DimmedOverlay({
-    this.highlightedKey,
-    this.secondHighlightedKey,
-    this.scrollController,
-    this.targetRect,
-    this.secondTargetRect,
-    this.paintSurfaceKey,
-  });
-
-  final GlobalKey? highlightedKey;
-  final GlobalKey? secondHighlightedKey;
-  final ScrollController? scrollController;
-  final Rect? targetRect; // For advanced mode
-  final Rect? secondTargetRect; // For advanced mode (second highlight)
-  final GlobalKey? paintSurfaceKey; // Paint surface key from GuidedOverlay
-
-  @override
-  State<_DimmedOverlay> createState() => _DimmedOverlayState();
-}
-
-class _DimmedOverlayState extends State<_DimmedOverlay> {
-  @override
-  void initState() {
-    super.initState();
-    widget.scrollController?.addListener(_onScroll);
-  }
-
-  @override
-  void didUpdateWidget(_DimmedOverlay oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.scrollController != widget.scrollController) {
-      oldWidget.scrollController?.removeListener(_onScroll);
-      widget.scrollController?.addListener(_onScroll);
-    }
-  }
-
-  @override
-  void dispose() {
-    widget.scrollController?.removeListener(_onScroll);
-    super.dispose();
-  }
-
-  void _onScroll() {
-    setState(() {});
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return IgnorePointer(
-      ignoring: true,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          return CustomPaint(
-            key: widget.paintSurfaceKey, // Key on actual paint surface for correct coordinate space
-            size: Size(constraints.maxWidth, constraints.maxHeight),
-            painter: _OverlayPainter(
-              highlightedKey: widget.highlightedKey,
-              secondHighlightedKey: widget.secondHighlightedKey,
-              targetRect: widget.targetRect,
-              secondTargetRect: widget.secondTargetRect,
-              dimColor: Colors.black.withValues(alpha: 0.45),
-            ),
-          );
-        },
-      ),
     );
   }
 }
 
 class _OverlayPainter extends CustomPainter {
   _OverlayPainter({
-    this.highlightedKey,
-    this.secondHighlightedKey,
-    this.targetRect,
-    this.secondTargetRect,
+    this.cutoutRect,
     required this.dimColor,
   });
 
-  final GlobalKey? highlightedKey;
-  final GlobalKey? secondHighlightedKey;
-  final Rect? targetRect; // For advanced mode (already in local coordinates)
-  final Rect? secondTargetRect; // For advanced mode (second highlight, already in local coordinates)
+  final Rect? cutoutRect; // Nullable: when null, draw full-screen dim (no cutout)
   final Color dimColor;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final List<Rect> highlightedRects = [];
-
-    // If we have no target and no keys at all, do not draw anything.
-    // This avoids a full-screen blocking scrim when we don't yet know the highlight area.
-    // EXCEPTION: If we have a key but no rect yet (e.g., Step 4 before TrackTile mounts),
-    // show full-screen dim so overlay is visible; cutout will appear once rect is computed.
-    final bool hasKeyButNoRect = (highlightedKey != null || secondHighlightedKey != null) &&
-        targetRect == null &&
-        secondTargetRect == null;
-    if (targetRect == null && highlightedKey == null && secondHighlightedKey == null) {
-      return;
-    }
-
-    // Use targetRect if provided (advanced mode, already local), otherwise compute from keys
-    if (targetRect != null) {
-      var localRect = targetRect!;
-
-      // UNIFIED: Safe canvas bounds intersection (applies to all steps)
-      // This prevents cutout from being drawn outside the overlay canvas
-      final canvasBounds = Rect.fromLTWH(0, 0, size.width, size.height);
-      localRect = localRect.intersect(canvasBounds);
-
-      highlightedRects.add(localRect);
-    }
-    
-    // Add second target rect if provided
-    if (secondTargetRect != null) {
-      var localSecondRect = secondTargetRect!;
-      final canvasBounds = Rect.fromLTWH(0, 0, size.width, size.height);
-      localSecondRect = localSecondRect.intersect(canvasBounds);
-      highlightedRects.add(localSecondRect);
-    }
-    
-    if (targetRect == null && secondTargetRect == null) {
-      // Legacy mode: compute from keys in the paint surface's own coordinate space.
-      // For legacy/simple mode we don't rely on advanced mobile behavior, so a direct
-      // use of globalPosition is acceptable as long as the paint surface matches the screen.
-      if (highlightedKey?.currentContext != null) {
-        final renderBox = highlightedKey!.currentContext!.findRenderObject() as RenderBox?;
-        if (renderBox != null && renderBox.hasSize) {
-          final globalPosition = renderBox.localToGlobal(Offset.zero);
-          final localPosition = globalPosition;
-          highlightedRects.add(Rect.fromLTWH(
-            localPosition.dx,
-            localPosition.dy,
-            renderBox.size.width,
-            renderBox.size.height,
-          ));
-        }
-      }
-
-      if (secondHighlightedKey?.currentContext != null) {
-        final renderBox = secondHighlightedKey!.currentContext!.findRenderObject() as RenderBox?;
-        if (renderBox != null && renderBox.hasSize) {
-          final globalPosition = renderBox.localToGlobal(Offset.zero);
-          final localPosition = globalPosition;
-          highlightedRects.add(Rect.fromLTWH(
-            localPosition.dx,
-            localPosition.dy,
-            renderBox.size.width,
-            renderBox.size.height,
-          ));
-        }
-      }
-    }
-
-    // If we expected a highlight (we had a key or targetRect) but couldn't compute a rect yet,
-    // show full-screen dim (for Step 4 visibility) and try again on the next paint.
-    // Once rect is computed, the cutout will appear.
-    if (highlightedRects.isEmpty) {
-      if (hasKeyButNoRect) {
-        // Show full-screen dim when we have a key but no rect yet (Step 4 case)
-        final dimPaint = Paint()..color = dimColor;
-        canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), dimPaint);
-      }
-      return;
-    }
-    
-    // Calculate combined bounding rect
-    double minLeft = size.width;
-    double minTop = size.height;
-    double maxRight = 0;
-    double maxBottom = 0;
-    
-    for (final rect in highlightedRects) {
-      if (rect.left < minLeft) minLeft = rect.left;
-      if (rect.top < minTop) minTop = rect.top;
-      if (rect.right > maxRight) maxRight = rect.right;
-      if (rect.bottom > maxBottom) maxBottom = rect.bottom;
-    }
-    
-    final combinedRect = Rect.fromLTRB(minLeft, minTop, maxRight, maxBottom);
     final dimPaint = Paint()..color = dimColor;
+    
+    // IMPROVEMENT 1: If cutoutRect is null, draw full-screen dim (barrier visible, no cutout)
+    if (cutoutRect == null) {
+      canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), dimPaint);
+      return;
+    }
+    
+    // Clamp cutout rect to canvas bounds
+    final clampedRect = cutoutRect!.intersect(Rect.fromLTWH(0, 0, size.width, size.height));
+    
+    if (clampedRect.width <= 0 || clampedRect.height <= 0) {
+      // Invalid rect - draw full-screen dim
+      canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), dimPaint);
+      return;
+    }
 
-    // Draw dimmed areas around highlighted area
-    if (combinedRect.top > 0) {
-      canvas.drawRect(Rect.fromLTWH(0, 0, size.width, combinedRect.top), dimPaint);
+    // Draw dimmed areas around the cutout
+    // Top area
+    if (clampedRect.top > 0) {
+      canvas.drawRect(Rect.fromLTWH(0, 0, size.width, clampedRect.top), dimPaint);
     }
-    if (combinedRect.left > 0) {
+
+    // Left area
+    if (clampedRect.left > 0) {
       canvas.drawRect(
-        Rect.fromLTWH(0, combinedRect.top, combinedRect.left, combinedRect.height),
+        Rect.fromLTWH(0, clampedRect.top, clampedRect.left, clampedRect.height),
         dimPaint,
       );
     }
-    if (combinedRect.right < size.width) {
+
+    // Right area
+    if (clampedRect.right < size.width) {
       canvas.drawRect(
-        Rect.fromLTWH(combinedRect.right, combinedRect.top, size.width - combinedRect.right, combinedRect.height),
+        Rect.fromLTWH(clampedRect.right, clampedRect.top, size.width - clampedRect.right, clampedRect.height),
         dimPaint,
       );
     }
-    if (combinedRect.bottom < size.height) {
+
+    // Bottom area
+    if (clampedRect.bottom < size.height) {
       canvas.drawRect(
-        Rect.fromLTWH(0, combinedRect.bottom, size.width, size.height - combinedRect.bottom),
+        Rect.fromLTWH(0, clampedRect.bottom, size.width, size.height - clampedRect.bottom),
         dimPaint,
       );
     }
   }
 
   @override
-  bool shouldRepaint(_OverlayPainter oldDelegate) => true;
-}
-
-class _MessageBubble extends StatelessWidget {
-  const _MessageBubble({
-    required this.text,
-    required this.showCompletionButton,
-    required this.showContinueButton,
-    required this.continueButtonText,
-    this.highlightedKey,
-    this.onComplete,
-    this.onContinue,
-    this.scrollController,
-  });
-
-  final String text;
-  final bool showCompletionButton;
-  final bool showContinueButton;
-  final String continueButtonText;
-  final GlobalKey? highlightedKey;
-  final VoidCallback? onComplete;
-  final VoidCallback? onContinue;
-  final ScrollController? scrollController;
-
-  @override
-  Widget build(BuildContext context) {
-    if (highlightedKey?.currentContext != null) {
-      final renderBox = highlightedKey!.currentContext!.findRenderObject() as RenderBox?;
-      if (renderBox != null && renderBox.hasSize) {
-        final position = renderBox.localToGlobal(Offset.zero);
-        final screenHeight = MediaQuery.of(context).size.height;
-        final messageHeight = (showCompletionButton || showContinueButton) ? 180.0 : 100.0;
-        final spacing = 16.0;
-
-        final isAbove = position.dy > messageHeight + spacing;
-        final top = isAbove
-            ? position.dy - messageHeight - spacing
-            : position.dy + renderBox.size.height + spacing;
-
-        return Positioned(
-          left: 16,
-          right: 16,
-          top: top.clamp(16.0, screenHeight - messageHeight - 16),
-          child: IgnorePointer(
-            ignoring: false,
-            child: _BubbleContent(
-              text: text,
-              showCompletionButton: showCompletionButton,
-              showContinueButton: showContinueButton,
-              continueButtonText: continueButtonText,
-              onComplete: onComplete,
-              onContinue: onContinue,
-            ),
-          ),
-        );
-      }
-    }
-
-    return Positioned(
-      left: 16,
-      right: 16,
-      bottom: 24 + MediaQuery.of(context).padding.bottom,
-      child: IgnorePointer(
-        ignoring: false,
-        child: _BubbleContent(
-          text: text,
-          showCompletionButton: showCompletionButton,
-          showContinueButton: showContinueButton,
-          continueButtonText: continueButtonText,
-          onComplete: onComplete,
-          onContinue: onContinue,
-        ),
-      ),
-    );
-  }
-}
-
-class _BubbleContent extends StatelessWidget {
-  const _BubbleContent({
-    required this.text,
-    required this.showCompletionButton,
-    required this.showContinueButton,
-    required this.continueButtonText,
-    this.onComplete,
-    this.onContinue,
-  });
-
-  final String text;
-  final bool showCompletionButton;
-  final bool showContinueButton;
-  final String continueButtonText;
-  final VoidCallback? onComplete;
-  final VoidCallback? onContinue;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.1),
-                blurRadius: 8,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          child: Text(
-            text,
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              fontSize: 16,
-              height: 1.4,
-              color: Color(0xFF1C1C1E),
-            ),
-          ),
-        ),
-        if (showContinueButton && onContinue != null) ...[
-          const SizedBox(height: 12),
-          Material(
-            color: Colors.transparent,
-            child: SizedBox(
-              height: 48,
-              child: ElevatedButton(
-                onPressed: onContinue,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF007AFF),
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-                child: Text(
-                  continueButtonText,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ] else if (showCompletionButton) ...[
-          const SizedBox(height: 12),
-          SizedBox(
-            height: 48,
-            child: ElevatedButton(
-              onPressed: onComplete,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF007AFF),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-              child: const Text(
-                'Onboarding Complete',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ],
-    );
+  bool shouldRepaint(_OverlayPainter oldDelegate) {
+    // Repaint when cutout rect changes (for animation) or when cutout appears/disappears
+    return oldDelegate.cutoutRect != cutoutRect;
   }
 }

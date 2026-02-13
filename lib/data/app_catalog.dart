@@ -91,7 +91,7 @@ class TrackDef {
 /// (Names & 5 lessons per track come from your spec)
 final List<TrackDef> kTracks = [
   TrackDef(
-    title: 'Everyday Communication',
+    title: 'Everyday\nCommunication',
     icon: Icons.email_outlined,
     lessons: buildTrack1Lessons(),
   ),
@@ -111,7 +111,7 @@ final List<TrackDef> kTracks = [
     lessons: buildTrack4Lessons(),
   ), // Track 4
   TrackDef(
-    title: 'Communication',
+    title: 'Strategic\nCommunication',
     icon: Icons.message_outlined,
     lessons: buildTrack5Lessons(),
   ), // Track 5

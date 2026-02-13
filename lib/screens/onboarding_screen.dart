@@ -1,11 +1,8 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import '../onboarding/guided_onboarding_controller.dart';
-import '../onboarding/onboarding_state.dart';
-import '../services/onboarding_service.dart';
-import '../ui/shared/app_scaffold.dart';
-import '../ui/adaptive/adaptive_container.dart';
-import '../ui/adaptive/adaptive_insets.dart';
+import '../onboarding/guided_onboarding_navigation.dart';
+import '../widgets/guided_overlay.dart';
 import 'home_screen.dart';
 
 class OnboardingScreen extends StatefulWidget {
@@ -20,6 +17,7 @@ class OnboardingScreen extends StatefulWidget {
 class _OnboardingScreenState extends State<OnboardingScreen> {
   late final PageController _controller;
   late int _index;
+  bool _didStabilizeFirstFrame = false;
 
   @override
   void initState() {
@@ -39,42 +37,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     }
   }
 
-  void _previous() {
-    if (_index > 0) {
-      _controller.previousPage(
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeInOut,
-      );
-    }
-  }
-
-  void _skipOnboarding() async {
-    // Skip the entire onboarding and mark it as completed
-    await OnboardingState.markCompleted();
-    if (!mounted) return;
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (_) => const HomeScreen()),
-    );
-  }
-
-  Future<void> _startGuidedTour() async {
-    // Mark intro slides as shown and begin the in-app guided walkthrough.
-    // OnboardingState.markIntroShown() is called by GuidedOnboardingController.start()
-    // CRITICAL: start() sets _active=true and _step=trackSelection SYNCHRONOUSLY
-    // before any async operations, so state is immediately available
+  void _startGuidedTour() async {
+    // Begin the in-app guided walkthrough. Completion is handled later
+    // once the user finishes the full tour inside the app.
+    // Note: This is called from the Continue button when NOT in guided mode.
+    // When in guided mode (Repeat Onboarding), the onContinue handler in GuidedOverlay handles Step 3 → Step 4.
     await GuidedOnboardingController.start();
-    
-    // Debug log to confirm step 3 -> step 4 transition
-    if (kDebugMode) {
-      debugPrint('[ONBOARDING] Step 3 -> Step 4 transition: '
-          'isActive=${GuidedOnboardingController.isActive}, '
-          'currentStep=${GuidedOnboardingController.currentStep}');
-    }
-    
     if (!mounted) return;
-    
-    // Navigate to HomeScreen - state is already set synchronously, so overlay will mount immediately
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(builder: (_) => const HomeScreen()),
@@ -102,131 +71,211 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return AppScaffold(
-      body: Column(
+    return ValueListenableBuilder<GuidedOnboardingStep>(
+      valueListenable: GuidedOnboardingController.stepNotifier,
+      builder: (context, currentStepEnum, _) {
+        final isGuided = GuidedOnboardingController.isActive;
+        final currentStep = GuidedOnboardingController.currentStep;
+        // For intro steps use the builder parameter so counter/overlay get correct step on first launch.
+        int? stepNumber;
+        if (currentStepEnum == GuidedOnboardingStep.intro1) {
+          stepNumber = 1;
+        } else if (currentStepEnum == GuidedOnboardingStep.intro2) {
+          stepNumber = 2;
+        } else if (currentStepEnum == GuidedOnboardingStep.intro3) {
+          stepNumber = 3;
+        } else {
+          stepNumber = GuidedOnboardingController.getCurrentStepNumber();
+        }
+
+        // Determine if we should show onboarding UI for intro steps (enum only; no isActive gate so counter/overlay render on first frame)
+        final bool isIntroStep = currentStepEnum == GuidedOnboardingStep.intro1 ||
+            currentStepEnum == GuidedOnboardingStep.intro2 ||
+            currentStepEnum == GuidedOnboardingStep.intro3;
+
+        if (!_didStabilizeFirstFrame && isIntroStep) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) setState(() => _didStabilizeFirstFrame = true);
+          });
+        }
+
+        // Sync page index with step number if in guided mode (minimal, read-only)
+        if (isIntroStep && stepNumber != null && stepNumber >= 1 && stepNumber <= 3) {
+          final targetIndex = stepNumber - 1;
+          if (_index != targetIndex && _controller.hasClients) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted && _controller.hasClients && _index != targetIndex) {
+                _controller.animateToPage(
+                  targetIndex,
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeInOut,
+                );
+                setState(() {
+                  _index = targetIndex;
+                });
+              }
+            });
+          }
+        }
+
+        // Get step text and handlers for onboarding UI (build G style: no duplicate text, just controls)
+        // For intro steps, pass empty text to avoid duplicating slide content
+        String stepText = '';
+        bool showContinueButton = true;
+        String continueButtonText = 'Next';
+        VoidCallback? onContinue;
+
+        if (isIntroStep && stepNumber != null) {
+          switch (stepNumber) {
+            case 1:
+              // Step 1: Skip only + Next (no Previous)
+              onContinue = () async {
+                await GuidedOnboardingController.goNext();
+                if (mounted && _controller.hasClients) {
+                  _controller.nextPage(
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.easeInOut,
+                  );
+                }
+              };
+              break;
+            case 2:
+              // Step 2: Previous + Skip + Next
+              onContinue = () async {
+                await GuidedOnboardingController.goNext();
+                if (mounted && _controller.hasClients) {
+                  _controller.nextPage(
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.easeInOut,
+                  );
+                }
+              };
+              break;
+            case 3:
+              // Step 3: Previous + Skip + Start Guided Tour
+              continueButtonText = 'Start Guided Tour';
+              onContinue = () async {
+                // Step 3 -> Step 4: Use centralized navigation helper
+                await handleGuidedNext(context);
+              };
+              break;
+          }
+        }
+
+        return Scaffold(
+      backgroundColor: Colors.white,
+      body: SafeArea(
+        child: Stack(
           children: [
-            Expanded(
-              child: PageView.builder(
-                controller: _controller,
-                itemCount: _pages.length,
-                onPageChanged: (i) => setState(() => _index = i),
-                itemBuilder: (context, i) => _OnboardingPageWidget(
-                  page: _pages[i],
-                  stepNumber: i + 1,
+            Column(
+              children: [
+                Expanded(
+                  child: PageView.builder(
+                    controller: _controller,
+                    itemCount: _pages.length,
+                    onPageChanged: (i) {
+                      setState(() {
+                        _index = i;
+                      });
+                      
+                      // Sync controller step when user swipes between intro pages
+                      // Only sync when onboarding is active and we're in intro flow
+                      if (isGuided && isIntroStep) {
+                        // Use post-frame callback to avoid state changes during build
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          if (mounted && GuidedOnboardingController.isActive) {
+                            final currentStep = GuidedOnboardingController.currentStep;
+                            final isStillIntro = currentStep == GuidedOnboardingStep.intro1 ||
+                                currentStep == GuidedOnboardingStep.intro2 ||
+                                currentStep == GuidedOnboardingStep.intro3;
+                            
+                            // Only sync if still in intro context (guard against race conditions)
+                            if (isStillIntro) {
+                              if (kDebugMode) {
+                                debugPrint('[ONBOARDING_SCREEN] onPageChanged: syncing pageIndex=$i to controller step');
+                              }
+                              GuidedOnboardingController.setIntroStepFromPage(i);
+                            }
+                          }
+                        });
+                      }
+                    },
+                    itemBuilder: (context, i) => _OnboardingPageWidget(
+                      page: _pages[i],
+                    ),
+                  ),
                 ),
-              ),
-            ),
-            // Page indicators
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              child: _PageIndicators(
-                count: _pages.length,
-                currentIndex: _index,
-              ),
-            ),
-            // Navigation buttons (Previous Step and Skip Onboarding)
-            Padding(
-              padding: EdgeInsets.fromLTRB(
-                AdaptiveInsets.pagePadding(context).horizontal,
-                0,
-                AdaptiveInsets.pagePadding(context).horizontal,
-                16,
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  // Previous Step button (only from page 2 onwards)
-                  if (_index > 0)
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: _previous,
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          minimumSize: const Size(0, 44),
-                          side: const BorderSide(color: Color(0xFF007AFF), width: 1.5),
+                // Page indicators
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  child: _PageIndicators(
+                    count: _pages.length,
+                    currentIndex: _index,
+                  ),
+                ),
+                // Continue button (only shown when NOT in guided mode)
+                if (!isIntroStep)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+                    child: SizedBox(
+                      width: double.infinity,
+                      height: 50,
+                      child: ElevatedButton(
+                        onPressed: _next,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF007AFF),
+                          foregroundColor: Colors.white,
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
                           ),
+                          elevation: 0,
                         ),
-                        child: const Text(
-                          'Previous Step',
-                          style: TextStyle(
-                            fontSize: 15,
+                        child: Text(
+                          _pages[_index].isCompletion
+                              ? 'Start Guided Tour'
+                              : 'Continue',
+                          style: const TextStyle(
+                            fontSize: 17,
                             fontWeight: FontWeight.w600,
-                            color: Color(0xFF007AFF),
+                            letterSpacing: -0.4,
                           ),
                         ),
                       ),
-                    )
-                  else
-                    const SizedBox.shrink(),
-                  if (_index > 0) const SizedBox(width: 12),
-                  // Skip Onboarding button (available from page 1, but not on last step of guided tour)
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: _skipOnboarding,
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        minimumSize: const Size(0, 44),
-                        side: const BorderSide(color: Color(0xFF007AFF), width: 1.5),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                      child: const Text(
-                        'Skip Onboarding',
-                        style: TextStyle(
-                          fontSize: 15,
+                    ),
+                  ),
+              ],
+            ),
+            // Intro step counter "X/17" at top center for steps 1–3 in guided mode.
+            if (isIntroStep && stepNumber != null)
+              Align(
+                alignment: Alignment.topCenter,
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    '$stepNumber/${GuidedOnboardingController.totalSteps}',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                           fontWeight: FontWeight.w600,
-                          color: Color(0xFF007AFF),
                         ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            // Continue button - wrapped in SafeArea to avoid nav bar coverage
-            SafeArea(
-              top: false,
-              bottom: true,
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(
-                  24,
-                  0,
-                  24,
-                  16 + MediaQuery.of(context).viewPadding.bottom,
-                ),
-                child: SizedBox(
-                  width: double.infinity,
-                  height: 52,
-                  child: ElevatedButton(
-                    onPressed: _next,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF007AFF),
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      elevation: 0,
-                    ),
-                    child: Text(
-                      _pages[_index].isCompletion
-                          ? 'Start Guided Tour'
-                          : 'Continue',
-                      style: const TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: -0.2,
-                      ),
-                    ),
                   ),
                 ),
               ),
-            ),
+            // Onboarding overlay for intro steps (build G style: bottom sheet controls only, no bubble text)
+            if (isIntroStep)
+              GuidedOverlay(
+                text: stepText, // Empty text to avoid duplicating slide content
+                highlightedKey: null, // No highlight for intro slides
+                currentStep: stepNumber,
+                onPreviousStep: null,
+                onSkip: () => handleGuidedSkip(context),
+                showContinueButton: showContinueButton,
+                continueButtonText: continueButtonText,
+                onContinue: onContinue,
+              ),
           ],
         ),
+      ),
+    );
+      },
     );
   }
 
@@ -237,93 +286,44 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 }
 
-class _OnboardingPageWidget extends StatefulWidget {
-  const _OnboardingPageWidget({
-    required this.page,
-    required this.stepNumber,
-  });
+class _OnboardingPageWidget extends StatelessWidget {
+  const _OnboardingPageWidget({required this.page});
 
   final _OnboardingPage page;
-  final int stepNumber;
-
-  @override
-  State<_OnboardingPageWidget> createState() => _OnboardingPageWidgetState();
-}
-
-class _OnboardingPageWidgetState extends State<_OnboardingPageWidget>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _fadeAnimation;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      duration: const Duration(milliseconds: 400),
-      vsync: this,
-    );
-    _fadeAnimation = CurvedAnimation(
-      parent: _controller,
-      curve: Curves.easeOut,
-    );
-    _controller.forward();
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
-    return FadeTransition(
-      opacity: _fadeAnimation,
-      child: SingleChildScrollView(
-        padding: AdaptiveInsets.pagePadding(context),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            SizedBox(height: AdaptiveInsets.sectionGap(context) * 2),
-            // Step number (for steps 1-3)
-            Text(
-              '${widget.stepNumber}/${GuidedOnboardingController.totalSteps}',
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF1C1C1E),
-                letterSpacing: 0.2,
-              ),
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 32),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const SizedBox(height: 40),
+          Text(
+            page.title,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 28,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF000000),
+              letterSpacing: -0.5,
+              height: 1.2,
             ),
-            SizedBox(height: AdaptiveInsets.sectionGap(context) * 0.75),
-            Text(
-              widget.page.title,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontSize: 28,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF000000),
-                letterSpacing: -0.5,
-                height: 1.3,
-              ),
+          ),
+          const SizedBox(height: 24),
+          Text(
+            page.body,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.w400,
+              color: Color(0xFF3C3C43),
+              letterSpacing: -0.4,
+              height: 1.4,
             ),
-            SizedBox(height: AdaptiveInsets.sectionGap(context)),
-            // Use SelectableText for better wrapping and accessibility
-            SelectableText(
-              widget.page.body,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontSize: 17,
-                fontWeight: FontWeight.w400,
-                color: Color(0xFF3C3C43),
-                letterSpacing: -0.4,
-                height: 1.5,
-              ),
-            ),
-            SizedBox(height: AdaptiveInsets.sectionGap(context) * 2),
-          ],
-        ),
+          ),
+          const SizedBox(height: 40),
+        ],
       ),
     );
   }
@@ -344,16 +344,14 @@ class _PageIndicators extends StatelessWidget {
       mainAxisAlignment: MainAxisAlignment.center,
       children: List.generate(
         count,
-        (index) => AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeInOut,
-          width: index == currentIndex ? 10 : 8,
+        (index) => Container(
+          width: index == currentIndex ? 8 : 8,
           height: 8,
           margin: const EdgeInsets.symmetric(horizontal: 4),
           decoration: BoxDecoration(
             color: index == currentIndex
                 ? const Color(0xFF007AFF)
-                : const Color(0xFFC7C7CC).withValues(alpha: 0.5),
+                : const Color(0xFFC7C7CC),
             shape: BoxShape.circle,
           ),
         ),

@@ -2,7 +2,7 @@
 /// Used to verify the installed APK matches the source code.
 class BuildInfo {
   /// Unique build identifier - change this for each build to verify APK updates.
-  static const String kBuildId = "AIREADY-2026-01-21-T";
+  static const String kBuildId = "AIREADY-2026-01-27-M";
   
   /// Expected number of onboarding steps (intro slides + guided walkthrough).
   static const int kExpectedOnboardingSteps = 17;
@@ -14,3 +14,4 @@ class BuildInfo {
   /// This is a compile-time constant - if GuidedOverlay exists, this is true.
   static const bool kGuidedOverlayPresent = true;
 }
+

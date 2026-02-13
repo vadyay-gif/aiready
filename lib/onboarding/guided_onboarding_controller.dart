@@ -2,10 +2,14 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'onboarding_state.dart';
 import '../services/guided_onboarding.dart' as OldService;
+import 'onboarding_debug_log.dart';
 
 /// High-level steps for the hybrid onboarding walkthrough.
 enum GuidedOnboardingStep {
   none,
+  intro1, // Step 1: Intro slide 1
+  intro2, // Step 2: Intro slide 2
+  intro3, // Step 3: Intro slide 3
   trackSelection,
   lessonSelection,
   scenarioSelection,
@@ -15,6 +19,7 @@ enum GuidedOnboardingStep {
   taskFeedback,
   resultsTakeaway,
   infoSettings,
+  repeatOnboarding, // Step 17: Settings page, Repeat Onboarding; goNext here -> completed
   completed,
 }
 
@@ -46,6 +51,13 @@ class GuidedOnboardingController {
   static final ValueNotifier<int> scenarioSectionNotifier =
       ValueNotifier<int>(_scenarioSectionIndex);
 
+  /// Step entry tick: increments every time the current onboarding step changes
+  /// (forward, backward, skip, or UI action). Screens use this to reset guards
+  /// and positioning deterministically on step re-entry.
+  static int _stepEntryTick = 0;
+  static final ValueNotifier<int> stepEntryTick =
+      ValueNotifier<int>(_stepEntryTick);
+
   static bool get isActive => _active;
   static GuidedOnboardingStep get currentStep => _step;
   static int get scenarioSectionIndex => _scenarioSectionIndex;
@@ -75,6 +87,10 @@ class GuidedOnboardingController {
           stepIndex >= 0 &&
           stepIndex < GuidedOnboardingStep.values.length) {
         _step = GuidedOnboardingStep.values[stepIndex];
+        // Migration: old persisted index 10 was completed; now 10 = repeatOnboarding. If _active is false, it was completed.
+        if (_step == GuidedOnboardingStep.repeatOnboarding && !_active) {
+          _step = GuidedOnboardingStep.completed;
+        }
       } else {
         _step = GuidedOnboardingStep.none;
       }
@@ -104,6 +120,7 @@ class GuidedOnboardingController {
       // Ensure notifiers are in sync with restored state.
       stepNotifier.value = _step;
       scenarioSectionNotifier.value = _scenarioSectionIndex;
+      // Note: Don't increment tick on initialization - only on user actions
     } catch (e) {
       if (kDebugMode) {
         debugPrint('[GUIDED_ONBOARDING] Error initializing: $e');
@@ -134,6 +151,69 @@ class GuidedOnboardingController {
     }
   }
 
+  /// Start the guided walkthrough from intro slide 1.
+  /// Use this for Repeat Onboarding to restart from the beginning.
+  static Future<void> startFromIntro() async {
+    _active = true;
+    _step = GuidedOnboardingStep.intro1;
+    _scenarioSectionIndex = 0;
+    stepNotifier.value = _step;
+    scenarioSectionNotifier.value = _scenarioSectionIndex;
+    _incrementStepEntryTick('ui');
+    await _persistState();
+    
+    // Don't mark intro as shown - we're restarting from intro
+    // await OnboardingState.markIntroShown();
+    
+    // COMPATIBILITY SYNC: Keep old service in sync for screens that still use it.
+    // Only sync when transitioning to non-intro steps (intro steps don't need old service).
+    // TaskScreen/ScenarioScreen use GuidedOnboardingController, so they don't need old service.
+    // This reduces risk of old service overriding controller state.
+    try {
+      await OldService.GuidedOnboarding.initialize();
+      // Don't sync intro steps to old service - they map to 'none' and screens use controller
+      // Only sync when we reach trackSelection or later steps
+      if (_step != GuidedOnboardingStep.intro1 && 
+          _step != GuidedOnboardingStep.intro2 && 
+          _step != GuidedOnboardingStep.intro3) {
+        if (!OldService.GuidedOnboarding.isActive) {
+          OldService.GuidedOnboarding.start();
+        }
+        final oldStep = _convertStepToOld(_step);
+        await OldService.GuidedOnboarding.goTo(oldStep);
+        if (kDebugMode) {
+          debugPrint('[GUIDED_ONBOARDING] startFromIntro sync: $_step -> $oldStep (old service)');
+        }
+      } else {
+        if (kDebugMode) {
+          debugPrint('[GUIDED_ONBOARDING] startFromIntro: skipping old service sync for intro step $_step');
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[GUIDED_ONBOARDING] Could not sync old service: $e');
+      }
+    }
+    
+    if (kDebugMode) {
+      debugPrint(
+        '[GUIDED_ONBOARDING] Started from intro: '
+        'active=$_active, step=$_step (persisted to $_activeKey/$_stepKey)',
+      );
+    }
+    stepNotifier.value = _step;
+    _incrementStepEntryTick('ui');
+
+    OnboardingDebugLog.controllerState = OnboardingControllerDebugState(
+      isActive: _active,
+      currentStepLabel: _step.toString(),
+      stepNumber: getCurrentStepNumber(),
+      totalSteps: totalSteps,
+      scenarioSectionIndex: _scenarioSectionIndex,
+    );
+    OnboardingDebugLog.log('controller', 'started from intro at step=$_step');
+  }
+
   /// Start the guided walkthrough from the Tracks screen.
   /// This should be called after intro slides are shown.
   static Future<void> start() async {
@@ -142,6 +222,7 @@ class GuidedOnboardingController {
     _scenarioSectionIndex = 0;
     stepNotifier.value = _step;
     scenarioSectionNotifier.value = _scenarioSectionIndex;
+    _incrementStepEntryTick('ui');
     await _persistState();
     
     // Mark that intro has been shown (so we don't show it again)
@@ -158,8 +239,15 @@ class GuidedOnboardingController {
     // TODO: Migrate remaining screens to use GuidedOnboardingController, then remove this.
     try {
       await OldService.GuidedOnboarding.initialize();
+      // Ensure old service is active for goTo to work
+      if (!OldService.GuidedOnboarding.isActive) {
+        OldService.GuidedOnboarding.start();
+      }
       final oldStep = _convertStepToOld(_step);
       await OldService.GuidedOnboarding.goTo(oldStep);
+      if (kDebugMode) {
+        debugPrint('[GUIDED_ONBOARDING] start sync: $_step -> $oldStep (old service active=${OldService.GuidedOnboarding.isActive})');
+      }
     } catch (e) {
       if (kDebugMode) {
         debugPrint('[GUIDED_ONBOARDING] Could not sync old service: $e');
@@ -174,16 +262,50 @@ class GuidedOnboardingController {
     }
     // Notify listeners of initial step
     stepNotifier.value = _step;
+
+    // Record initial controller snapshot for diagnostics.
+    OnboardingDebugLog.controllerState = OnboardingControllerDebugState(
+      isActive: _active,
+      currentStepLabel: _step.toString(),
+      stepNumber: getCurrentStepNumber(),
+      totalSteps: totalSteps,
+      scenarioSectionIndex: _scenarioSectionIndex,
+    );
+    OnboardingDebugLog.log('controller', 'started walkthrough at step=$_step');
   }
   
+
+  /// Helper to increment step entry tick and notify listeners.
+  /// Called whenever the step changes (Next, Prev, Skip, UI action, etc.).
+  static void _incrementStepEntryTick(String reason) {
+    _stepEntryTick++;
+    stepEntryTick.value = _stepEntryTick;
+    final stepNumber = getCurrentStepNumber();
+    if (kDebugMode) {
+      debugPrint(
+        '[GUIDED_STEP] stepEntryTick++ reason=$reason stepNumber=$stepNumber',
+      );
+    }
+  }
 
   /// Advance to the next step.
   static Future<void> goNext() async {
     if (!_active) return;
     
     final previous = _step;
+    OnboardingDebugLog.lastStepNumberBeforeAction ??=
+        getCurrentStepNumber() ?? 0;
 
     switch (_step) {
+      case GuidedOnboardingStep.intro1:
+        _step = GuidedOnboardingStep.intro2;
+        break;
+      case GuidedOnboardingStep.intro2:
+        _step = GuidedOnboardingStep.intro3;
+        break;
+      case GuidedOnboardingStep.intro3:
+        _step = GuidedOnboardingStep.trackSelection;
+        break;
       case GuidedOnboardingStep.trackSelection:
         _step = GuidedOnboardingStep.lessonSelection;
         break;
@@ -195,11 +317,21 @@ class GuidedOnboardingController {
         _scenarioSectionIndex = 0;
         break;
       case GuidedOnboardingStep.scenarioOverview:
-        // Scenario overview sections (steps 7–11) are advanced via
-        // advanceScenarioSection / advanceFromProTipToTask, not goNext.
-        if (kDebugMode) {
-          debugPrint(
-              '[GUIDED_FLOW] next ignored for scenarioOverview – use advanceScenarioSection/advanceFromProTipToTask');
+        // Scenario overview has sub-steps (7–11) driven by scenarioSectionIndex.
+        // For Steps 7–10 (index 0–3), goNext() should delegate to
+        // advanceScenarioSection(). For Step 11 (index 4), require the
+        // user to tap "Try the Task" instead of advancing here.
+        if (_scenarioSectionIndex < 4) {
+          if (kDebugMode) {
+            debugPrint('[GUIDED_FLOW] goNext delegates to advanceScenarioSection '
+                'idx=$_scenarioSectionIndex');
+          }
+          await advanceScenarioSection();
+        } else {
+          if (kDebugMode) {
+            debugPrint('[GUIDED_FLOW] goNext ignored at last scenario section '
+                'idx=$_scenarioSectionIndex (requires Try the Task)');
+          }
         }
         return;
       case GuidedOnboardingStep.taskIntro:
@@ -215,23 +347,76 @@ class GuidedOnboardingController {
         _step = GuidedOnboardingStep.infoSettings;
         break;
       case GuidedOnboardingStep.infoSettings:
+        _step = GuidedOnboardingStep.repeatOnboarding;
+        OnboardingDebugLog.log(
+          'controller',
+          'step transition infoSettings -> repeatOnboarding',
+        );
+        OnboardingDebugLog.log(
+          'controller',
+          'now stepNumber=17 enum=GuidedOnboardingStep.repeatOnboarding',
+        );
+        break;
+      case GuidedOnboardingStep.repeatOnboarding:
         await complete();
         return;
       default:
         return;
     }
     if (kDebugMode) {
-      debugPrint('[GUIDED_ONBOARDING] goNext: $previous -> $_step');
-      debugPrint('[GUIDED_FLOW] next enum=$previous -> $_step active=$_active');
+      final beforeNumber = getCurrentStepNumber();
+      debugPrint(
+          '[GUIDED_STEP] goNext: enum=$previous -> $_step, stepNumber=$beforeNumber');
     }
+
+    OnboardingDebugLog.recordStepTransition(
+      from: previous.toString(),
+      to: _step.toString(),
+    );
+    OnboardingDebugLog.lastStepNumberAfterAction =
+        getCurrentStepNumber() ?? 0;
+    OnboardingDebugLog.controllerState = OnboardingControllerDebugState(
+      isActive: _active,
+      currentStepLabel: _step.toString(),
+      stepNumber: getCurrentStepNumber(),
+      totalSteps: totalSteps,
+      scenarioSectionIndex: _scenarioSectionIndex,
+    );
     stepNotifier.value = _step;
     scenarioSectionNotifier.value = _scenarioSectionIndex;
     await _persistState();
     
-    // Sync the old service for backward compatibility
+    // Sync the old service for backward compatibility (only for non-intro steps)
+    // Intro steps don't need old service sync - screens use GuidedOnboardingController
     try {
-      final oldStep = _convertStepToOld(_step);
-      await OldService.GuidedOnboarding.goTo(oldStep);
+      // Only sync when transitioning to/from non-intro steps
+      if (_step != GuidedOnboardingStep.intro1 && 
+          _step != GuidedOnboardingStep.intro2 && 
+          _step != GuidedOnboardingStep.intro3 &&
+          previous != GuidedOnboardingStep.intro1 && 
+          previous != GuidedOnboardingStep.intro2 && 
+          previous != GuidedOnboardingStep.intro3) {
+        await OldService.GuidedOnboarding.initialize();
+        if (!OldService.GuidedOnboarding.isActive && _active) {
+          OldService.GuidedOnboarding.start();
+        }
+        final oldStep = _convertStepToOld(_step);
+        await OldService.GuidedOnboarding.goTo(oldStep);
+        if (kDebugMode && previous != _step) {
+          debugPrint('[GUIDED_ONBOARDING] goNext sync: $_step -> $oldStep (old service)');
+        }
+      } else if (previous == GuidedOnboardingStep.intro3 && _step == GuidedOnboardingStep.trackSelection) {
+        // Special case: intro3 -> trackSelection transition - sync old service for Step 4
+        await OldService.GuidedOnboarding.initialize();
+        if (!OldService.GuidedOnboarding.isActive) {
+          OldService.GuidedOnboarding.start();
+        }
+        final oldStep = _convertStepToOld(_step);
+        await OldService.GuidedOnboarding.goTo(oldStep);
+        if (kDebugMode) {
+          debugPrint('[GUIDED_ONBOARDING] goNext sync: intro3->trackSelection -> $oldStep (old service)');
+        }
+      }
     } catch (e) {
       if (kDebugMode) {
         debugPrint('[GUIDED_ONBOARDING] Could not sync old service on goNext: $e');
@@ -241,6 +426,82 @@ class GuidedOnboardingController {
   
   /// Alias for goNext() for convenience.
   static Future<void> next() => goNext();
+
+  /// Sync intro step from PageView page index (for swiping between intro slides).
+  /// 
+  /// This method updates the controller step to match the visible intro page
+  /// when the user swipes between pages. It does NOT trigger navigation,
+  /// old service sync, or any side effects beyond updating the step enum.
+  /// 
+  /// Requirements:
+  /// - Only works when controller is active and step is an intro step
+  /// - Maps pageIndex: 0 -> intro1, 1 -> intro2, 2 -> intro3
+  /// - Idempotent: does nothing if already on the target step
+  /// - Post-frame safe: can be called from post-frame callbacks
+  /// - Synchronous: does not await persistence to avoid desync
+  /// - Static: uses the same static state as all other controller methods
+  static void setIntroStepFromPage(int pageIndex) {
+    if (!_active) {
+      if (kDebugMode) {
+        debugPrint('[GUIDED_ONBOARDING] setIntroStepFromPage: ignored (not active)');
+      }
+      return;
+    }
+    
+    // Map page index to step enum
+    GuidedOnboardingStep targetStep;
+    switch (pageIndex) {
+      case 0:
+        targetStep = GuidedOnboardingStep.intro1;
+        break;
+      case 1:
+        targetStep = GuidedOnboardingStep.intro2;
+        break;
+      case 2:
+        targetStep = GuidedOnboardingStep.intro3;
+        break;
+      default:
+        if (kDebugMode) {
+          debugPrint('[GUIDED_ONBOARDING] setIntroStepFromPage: invalid pageIndex=$pageIndex');
+        }
+        return;
+    }
+    
+    // Only update if we're currently on an intro step (or transitioning to one)
+    final isCurrentlyIntro = _step == GuidedOnboardingStep.intro1 ||
+        _step == GuidedOnboardingStep.intro2 ||
+        _step == GuidedOnboardingStep.intro3;
+    
+    if (!isCurrentlyIntro && _step != GuidedOnboardingStep.none) {
+      if (kDebugMode) {
+        debugPrint('[GUIDED_ONBOARDING] setIntroStepFromPage: ignored (not on intro step, current=$_step)');
+      }
+      return;
+    }
+    
+    // Idempotent: do nothing if already on target step
+    if (_step == targetStep) {
+      return;
+    }
+    
+    // Update step without navigation or old service sync
+    final previous = _step;
+    _step = targetStep;
+    stepNotifier.value = _step;
+    _incrementStepEntryTick('ui');
+    
+    // Persist state asynchronously (fire-and-forget to keep method synchronous)
+    // Add error handling to prevent unhandled exceptions
+    _persistState().catchError((e) {
+      if (kDebugMode) {
+        debugPrint('[GUIDED_ONBOARDING] setIntroStepFromPage persist failed: $e');
+      }
+    });
+    
+    if (kDebugMode) {
+      debugPrint('[GUIDED_ONBOARDING] setIntroStepFromPage: pageIndex=$pageIndex -> $previous -> $_step');
+    }
+  }
 
   /// Go to a specific step.
   /// Can be called even when not active (for resuming).
@@ -263,12 +524,25 @@ class GuidedOnboardingController {
       debugPrint('[GUIDED_ONBOARDING] goTo: $previous -> $_step');
     }
     stepNotifier.value = _step;
+    _incrementStepEntryTick('ui');
     await _persistState();
     
-    // Sync the old service for backward compatibility
+    // Sync the old service for backward compatibility (only for non-intro steps)
+    // Intro steps don't need old service sync - screens use GuidedOnboardingController
     try {
-      final oldStep = _convertStepToOld(step);
-      await OldService.GuidedOnboarding.goTo(oldStep);
+      if (step != GuidedOnboardingStep.intro1 && 
+          step != GuidedOnboardingStep.intro2 && 
+          step != GuidedOnboardingStep.intro3) {
+        await OldService.GuidedOnboarding.initialize();
+        if (!OldService.GuidedOnboarding.isActive && _active) {
+          OldService.GuidedOnboarding.start();
+        }
+        final oldStep = _convertStepToOld(step);
+        await OldService.GuidedOnboarding.goTo(oldStep);
+        if (kDebugMode) {
+          debugPrint('[GUIDED_ONBOARDING] goTo sync: $step -> $oldStep (old service)');
+        }
+      }
     } catch (e) {
       if (kDebugMode) {
         debugPrint('[GUIDED_ONBOARDING] Could not sync old service on goTo: $e');
@@ -278,6 +552,18 @@ class GuidedOnboardingController {
     if (kDebugMode) {
       debugPrint('[GUIDED_ONBOARDING] Went to step: $step (active=$_active)');
     }
+
+    OnboardingDebugLog.recordStepTransition(
+      from: previous.toString(),
+      to: _step.toString(),
+    );
+    OnboardingDebugLog.controllerState = OnboardingControllerDebugState(
+      isActive: _active,
+      currentStepLabel: _step.toString(),
+      stepNumber: getCurrentStepNumber(),
+      totalSteps: totalSteps,
+      scenarioSectionIndex: _scenarioSectionIndex,
+    );
   }
 
   /// Go back to the previous step.
@@ -285,10 +571,24 @@ class GuidedOnboardingController {
     if (!_active) return null;
     
     final oldStep = _step;
+    OnboardingDebugLog.lastStepNumberBeforeAction =
+        getCurrentStepNumber() ?? 0;
     GuidedOnboardingStep? previousStep;
     switch (_step) {
-      case GuidedOnboardingStep.trackSelection:
+      case GuidedOnboardingStep.intro1:
         return null; // Can't go back from first step
+      case GuidedOnboardingStep.intro2:
+        _step = GuidedOnboardingStep.intro1;
+        previousStep = _step;
+        break;
+      case GuidedOnboardingStep.intro3:
+        _step = GuidedOnboardingStep.intro2;
+        previousStep = _step;
+        break;
+      case GuidedOnboardingStep.trackSelection:
+        _step = GuidedOnboardingStep.intro3;
+        previousStep = _step;
+        break;
       case GuidedOnboardingStep.lessonSelection:
         _step = GuidedOnboardingStep.trackSelection;
         previousStep = _step;
@@ -298,10 +598,30 @@ class GuidedOnboardingController {
         previousStep = _step;
         break;
       case GuidedOnboardingStep.scenarioOverview:
-        _step = GuidedOnboardingStep.scenarioSelection;
-        _scenarioSectionIndex = 0;
-        scenarioSectionNotifier.value = _scenarioSectionIndex;
-        previousStep = _step;
+        // Within scenarioOverview (steps 7–11), Previous should walk backwards
+        // through scenarioSectionIndex (11→10→9→8→7) without leaving the screen.
+        // Only when we reach section index 0 (step 7) and go back again do we
+        // navigate to Step 6 (scenarioSelection).
+        if (_scenarioSectionIndex > 0) {
+          final before = _scenarioSectionIndex;
+          _scenarioSectionIndex--;
+          scenarioSectionNotifier.value = _scenarioSectionIndex;
+          previousStep = _step; // remain on scenarioOverview
+          if (kDebugMode) {
+            debugPrint(
+              '[GUIDED_FLOW] goBack scenarioOverview section idx=$before -> $_scenarioSectionIndex',
+            );
+          }
+          OnboardingDebugLog.log(
+            'controller',
+            'scenarioOverview goBack section idx=$before -> $_scenarioSectionIndex',
+          );
+        } else {
+          _step = GuidedOnboardingStep.scenarioSelection;
+          _scenarioSectionIndex = 0;
+          scenarioSectionNotifier.value = _scenarioSectionIndex;
+          previousStep = _step;
+        }
         break;
       case GuidedOnboardingStep.taskIntro:
         _step = GuidedOnboardingStep.scenarioOverview;
@@ -325,6 +645,10 @@ class GuidedOnboardingController {
         _step = GuidedOnboardingStep.resultsTakeaway;
         previousStep = _step;
         break;
+      case GuidedOnboardingStep.repeatOnboarding:
+        _step = GuidedOnboardingStep.infoSettings;
+        previousStep = _step;
+        break;
       default:
         return null;
     }
@@ -333,12 +657,28 @@ class GuidedOnboardingController {
     }
     stepNotifier.value = _step;
     await _persistState();
+
+    OnboardingDebugLog.lastStepNumberAfterAction =
+        getCurrentStepNumber() ?? 0;
+    OnboardingDebugLog.recordStepTransition(
+      from: oldStep.toString(),
+      to: _step.toString(),
+    );
+    OnboardingDebugLog.controllerState = OnboardingControllerDebugState(
+      isActive: _active,
+      currentStepLabel: _step.toString(),
+      stepNumber: getCurrentStepNumber(),
+      totalSteps: totalSteps,
+      scenarioSectionIndex: _scenarioSectionIndex,
+    );
     return previousStep;
   }
 
   /// Skip the entire onboarding flow.
   static Future<void> skip() async {
     if (!_active) return;
+    OnboardingDebugLog.lastStepNumberBeforeAction =
+        getCurrentStepNumber() ?? 0;
     await complete();
   }
 
@@ -355,6 +695,15 @@ class GuidedOnboardingController {
       debugPrint('[GUIDED_ONBOARDING] Completed walkthrough');
     }
     stepNotifier.value = _step;
+    _incrementStepEntryTick('skip');
+    OnboardingDebugLog.log('controller', 'completed walkthrough');
+    OnboardingDebugLog.controllerState = OnboardingControllerDebugState(
+      isActive: _active,
+      currentStepLabel: _step.toString(),
+      stepNumber: getCurrentStepNumber(),
+      totalSteps: totalSteps,
+      scenarioSectionIndex: _scenarioSectionIndex,
+    );
   }
 
   /// Reset onboarding (for testing/replay).
@@ -372,15 +721,30 @@ class GuidedOnboardingController {
       debugPrint('[GUIDED_ONBOARDING] Reset completely');
     }
     stepNotifier.value = _step;
+
+    OnboardingDebugLog.log('controller', 'reset completely');
+    OnboardingDebugLog.controllerState = OnboardingControllerDebugState(
+      isActive: _active,
+      currentStepLabel: _step.toString(),
+      stepNumber: getCurrentStepNumber(),
+      totalSteps: totalSteps,
+      scenarioSectionIndex: _scenarioSectionIndex,
+    );
   }
 
-  /// Get current step number (1-16) for display.
-  /// For scenarioOverview, pass the section index (0-4) to get the correct step (7-11).
-  /// For infoSettings, pass settingsPage: true if on the settings page (step 16), false for home screen (step 15).
+  /// Get current step number (1-17) for display.
+  /// For scenarioOverview, scenarioSectionIndex (0–4) maps to steps 7–11.
+  /// infoSettings = step 16 (Home). repeatOnboarding = step 17 (Settings). [settingsPage param ignored]
   static int? getCurrentStepNumber({int? scenarioSectionIndex, bool settingsPage = false}) {
     if (!_active) return null;
 
     switch (_step) {
+      case GuidedOnboardingStep.intro1:
+        return 1;
+      case GuidedOnboardingStep.intro2:
+        return 2;
+      case GuidedOnboardingStep.intro3:
+        return 3;
       case GuidedOnboardingStep.trackSelection:
         return 4;
       case GuidedOnboardingStep.lessonSelection:
@@ -388,7 +752,7 @@ class GuidedOnboardingController {
       case GuidedOnboardingStep.scenarioSelection:
         return 6;
       case GuidedOnboardingStep.scenarioOverview:
-        // Steps 7-11 for the 5 sections of scenario overview (0-4).
+        // Steps 7–11 for the 5 sections of scenario overview (0–4).
         final int idx = _scenarioSectionIndex.clamp(0, 4).toInt();
         return 7 + idx; // 7, 8, 9, 10, 11
       case GuidedOnboardingStep.taskIntro:
@@ -400,7 +764,9 @@ class GuidedOnboardingController {
       case GuidedOnboardingStep.resultsTakeaway:
         return 15;
       case GuidedOnboardingStep.infoSettings:
-        return settingsPage ? 17 : 16; // Step 16 on home screen, step 17 on settings page
+        return 16; // Step 16 on Home (Settings tile)
+      case GuidedOnboardingStep.repeatOnboarding:
+        return 17; // Step 17 on Settings (Repeat Onboarding)
       default:
         return null;
     }
@@ -427,20 +793,17 @@ class GuidedOnboardingController {
     final before = _scenarioSectionIndex;
     _scenarioSectionIndex++;
     scenarioSectionNotifier.value = _scenarioSectionIndex;
+    _incrementStepEntryTick('ui');
     if (kDebugMode) {
       debugPrint(
-          '[GUIDED_FLOW] section advance idx=$before -> $_scenarioSectionIndex');
+        '[GUIDED_FLOW] advanceScenarioSection idx=$before -> $_scenarioSectionIndex',
+      );
     }
+    OnboardingDebugLog.log(
+      'controller',
+      'section advance idx=$before -> $_scenarioSectionIndex',
+    );
     await _persistState();
-    try {
-      final oldStep = _convertStepToOld(_step);
-      await OldService.GuidedOnboarding.goTo(oldStep);
-    } catch (e) {
-      if (kDebugMode) {
-        debugPrint(
-            '[GUIDED_ONBOARDING] Could not sync old service on section advance: $e');
-      }
-    }
   }
 
   /// Advance from the Pro Tip (step 11, scenarioOverview idx=4) into the
@@ -462,6 +825,7 @@ class GuidedOnboardingController {
     _scenarioSectionIndex = 0;
     scenarioSectionNotifier.value = _scenarioSectionIndex;
     stepNotifier.value = _step;
+    _incrementStepEntryTick('ui');
     await _persistState();
     try {
       final oldStep = _convertStepToOld(_step);
@@ -472,12 +836,29 @@ class GuidedOnboardingController {
             '[GUIDED_ONBOARDING] Could not sync old service on proTip->taskIntro: $e');
       }
     }
+
+    OnboardingDebugLog.recordStepTransition(
+      from: GuidedOnboardingStep.scenarioOverview.toString(),
+      to: _step.toString(),
+    );
+    OnboardingDebugLog.controllerState = OnboardingControllerDebugState(
+      isActive: _active,
+      currentStepLabel: _step.toString(),
+      stepNumber: getCurrentStepNumber(),
+      totalSteps: totalSteps,
+      scenarioSectionIndex: _scenarioSectionIndex,
+    );
   }
   
   /// Convert our GuidedOnboardingStep enum to the old service's enum.
   static OldService.GuidedOnboardingStep _convertStepToOld(GuidedOnboardingStep step) {
     switch (step) {
       case GuidedOnboardingStep.none:
+        return OldService.GuidedOnboardingStep.none;
+      case GuidedOnboardingStep.intro1:
+      case GuidedOnboardingStep.intro2:
+      case GuidedOnboardingStep.intro3:
+        // Old service doesn't have intro steps, map to none
         return OldService.GuidedOnboardingStep.none;
       case GuidedOnboardingStep.trackSelection:
         return OldService.GuidedOnboardingStep.trackSelection;
@@ -498,6 +879,8 @@ class GuidedOnboardingController {
         return OldService.GuidedOnboardingStep.resultsTakeaway;
       case GuidedOnboardingStep.infoSettings:
         return OldService.GuidedOnboardingStep.infoSettings;
+      case GuidedOnboardingStep.repeatOnboarding:
+        return OldService.GuidedOnboardingStep.infoSettings; // Old service has no repeatOnboarding
       case GuidedOnboardingStep.completed:
         return OldService.GuidedOnboardingStep.completed;
     }
