@@ -1,0 +1,288 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import '../models/track.dart';
+import '../services/progress_service.dart';
+import '../widgets/lesson_bar.dart';
+import '../widgets/guided_overlay.dart';
+import '../data/app_catalog.dart';
+import '../onboarding/guided_onboarding_navigation.dart';
+import '../onboarding/guided_onboarding_controller.dart';
+import 'scenario_choice_screen.dart';
+
+class TrackScreen extends StatefulWidget {
+  final int trackIndex;
+  final Track? track; // Keep for backward compatibility
+
+  const TrackScreen({super.key, required this.trackIndex, this.track});
+
+  @override
+  State<TrackScreen> createState() => _TrackScreenState();
+}
+
+class _TrackScreenState extends State<TrackScreen> {
+  final GlobalKey _lesson1Key = GlobalKey();
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Use the new unified catalog
+    final trackDef = kTracks[widget.trackIndex];
+    final progressService = ProgressService();
+    final media = MediaQuery.of(context)
+        .copyWith(textScaler: const TextScaler.linear(1.0));
+    // Use new controller as source of truth
+    final isGuided = GuidedOnboardingController.isActive &&
+        GuidedOnboardingController.currentStep == GuidedOnboardingStep.lessonSelection &&
+        widget.trackIndex == 0; // Only for Track 1
+    final stepNumber = GuidedOnboardingController.getCurrentStepNumber();
+
+    return MediaQuery(
+      data: media,
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(trackDef.title),
+        ),
+        body: Stack(
+          children: [
+            _buildHorizontalBarLayout(context, trackDef, progressService),
+            if (isGuided && stepNumber == 5)
+              GuidedOverlay(
+                text: "Lessons focus on one specific skill.\nChoose the first lesson.",
+                highlightedKey: _lesson1Key,
+                scrollController: _scrollController,
+                currentStep: stepNumber,
+                onPreviousStep: null,
+                onSkip: () => handleGuidedSkip(context),
+                showContinueButton: false, // Step 5 is tap-required
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTrackIdentityBlock(BuildContext context, TrackDef trackDef) {
+    final theme = Theme.of(context);
+    final builds = trackDef.whatThisTrackBuilds?.trim() ?? '';
+    final when = trackDef.whenToUseThisTrack?.trim() ?? '';
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.28),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: theme.colorScheme.outlineVariant.withValues(alpha: 0.45),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'What this track builds:',
+            style: theme.textTheme.labelLarge?.copyWith(
+              fontWeight: FontWeight.w700,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            builds,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              height: 1.3,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'When to use this track:',
+            style: theme.textTheme.labelLarge?.copyWith(
+              fontWeight: FontWeight.w700,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            when,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              height: 1.3,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  double _listBottomPadding(BuildContext context) {
+    return 44 + MediaQuery.paddingOf(context).bottom;
+  }
+
+  Widget _buildLessonList(
+    BuildContext context,
+    List<LessonDef> lessons,
+    bool hasIdentity,
+    int headerCount,
+    ProgressService progressService,
+    TrackDef trackDef,
+  ) {
+    return ListView.separated(
+      controller: _scrollController,
+      padding: EdgeInsets.only(bottom: _listBottomPadding(context)),
+      itemCount: lessons.length + headerCount,
+      separatorBuilder: (_, index) {
+        if (hasIdentity && index == 0) {
+          return const SizedBox(height: 8);
+        }
+        return const SizedBox(height: 10);
+      },
+      itemBuilder: (context, i) {
+        if (hasIdentity && i == 0) {
+          return _buildTrackIdentityBlock(context, trackDef);
+        }
+        final lessonIndex = i - headerCount;
+        final lesson = lessons[lessonIndex];
+        final isGuided = GuidedOnboardingController.isActive &&
+            GuidedOnboardingController.currentStep ==
+                GuidedOnboardingStep.lessonSelection &&
+            widget.trackIndex == 0;
+        final isGuidedTarget = isGuided && lessonIndex == 0;
+        return FutureBuilder<bool>(
+          future: progressService
+              .isLessonComplete('t${widget.trackIndex + 1}_l${lessonIndex + 1}'),
+          builder: (context, snapshot) {
+            final isCompleted = snapshot.data == true;
+            final progress = isCompleted ? 1.0 : null;
+
+            return LessonBar(
+              key: isGuidedTarget ? _lesson1Key : null,
+              title: lesson.title,
+              subtitle: null, // subtitles are hidden in LessonBar
+              progress: progress,
+              icon: _getTrackIcon('t${widget.trackIndex + 1}'),
+              onTap: () {
+                if (GuidedOnboardingController.isActive &&
+                    GuidedOnboardingController.currentStep ==
+                        GuidedOnboardingStep.lessonSelection) {
+                  final beforeStep =
+                      GuidedOnboardingController.getCurrentStepNumber();
+                  final beforeEnum = GuidedOnboardingController.currentStep;
+                  if (kDebugMode) {
+                    debugPrint(
+                        '[TRACK_SCREEN] Lesson tap (index=$lessonIndex): beforeStep=$beforeStep ($beforeEnum)');
+                  }
+                  if (GuidedOnboardingController.currentStep ==
+                      GuidedOnboardingStep.lessonSelection) {
+                    GuidedOnboardingController.goNext();
+                    final afterStep =
+                        GuidedOnboardingController.getCurrentStepNumber();
+                    final afterEnum = GuidedOnboardingController.currentStep;
+                    if (kDebugMode) {
+                      debugPrint(
+                          '[TRACK_SCREEN] Lesson tap (index=$lessonIndex): afterStep=$afterStep ($afterEnum)');
+                    }
+                  }
+                }
+                _openLessonDetail(context, lessonIndex);
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return const Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text('No lessons available'),
+          SizedBox(height: 16),
+          BackButton(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHorizontalBarLayout(
+    BuildContext context,
+    TrackDef trackDef,
+    ProgressService progressService,
+  ) {
+    final lessons = trackDef.lessons;
+    final hasIdentity = (trackDef.whatThisTrackBuilds?.trim().isNotEmpty ??
+            false) &&
+        (trackDef.whenToUseThisTrack?.trim().isNotEmpty ?? false);
+    final headerCount = hasIdentity ? 1 : 0;
+
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 900),
+        child: SafeArea(
+          bottom: true,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: lessons.isEmpty
+                ? _buildEmptyState()
+                : _buildLessonList(
+                    context,
+                    lessons,
+                    hasIdentity,
+                    headerCount,
+                    progressService,
+                    trackDef,
+                  ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  IconData _getTrackIcon(String trackId) {
+    switch (trackId) {
+      case 't1': // Everyday Communication
+        return Icons.menu_book_outlined;
+      case 't2': // Reports & Summaries
+        return Icons.description_outlined;
+      case 't3': // Presentations
+        return Icons.slideshow_outlined;
+      case 't4': // Research & Brainstorming
+        return Icons.lightbulb_outlined;
+      case 't5': // Decision Structuring
+        return Icons.account_tree_outlined;
+      case 't6': // Meetings & Notes with AI
+        return Icons.event_note_outlined;
+      case 't7': // Research & Analysis with AI
+        return Icons.travel_explore_outlined;
+      case 't8': // Marketing & Social with AI
+        return Icons.campaign_outlined;
+      case 't9': // Spreadsheets & Data with AI
+        return Icons.table_chart_outlined;
+      default: // Fallback for other tracks
+        return Icons.menu_book_outlined;
+    }
+  }
+
+  void _openLessonDetail(BuildContext context, int lessonIndex) {
+    // Navigate directly to scenario choice screen
+    if (kDebugMode) {
+      debugPrint('Nav: Track -> ScenarioChoice | ${kTracks[widget.trackIndex].title} / ${kTracks[widget.trackIndex].lessons[lessonIndex].title}');
+    }
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ScenarioChoiceScreen(
+          trackIndex: widget.trackIndex,
+          lessonIndex: lessonIndex,
+        ),
+      ),
+    );
+  }
+}

@@ -1,0 +1,17 @@
+/// Build-time diagnostics constants.
+/// Used to verify the installed APK matches the source code.
+class BuildInfo {
+  /// Unique build identifier - change this for each build to verify APK updates.
+  static const String kBuildId = "AIREADY-FINGERPRINT-2026-02-13-Y";
+  
+  /// Expected number of onboarding steps (intro slides + guided walkthrough).
+  static const int kExpectedOnboardingSteps = 17;
+  
+  /// Track 7 title - verify it matches everywhere.
+  static const String kTrack7Title = "Root-Cause Thinking";
+  
+  /// Whether guided overlay is present in the app.
+  /// This is a compile-time constant - if GuidedOverlay exists, this is true.
+  static const bool kGuidedOverlayPresent = true;
+}
+
